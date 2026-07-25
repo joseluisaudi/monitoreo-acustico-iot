@@ -1,0 +1,13 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Los usuarios autenticados pueden leer los registros de ruido
+    match /noise_logs/{document} {
+      allow read: if request.auth != null;
+      // Los datos son inyectados mediante la Cloud Function (privilegios de Admin), 
+      // por lo que denegamos la escritura directa desde el cliente por seguridad
+      allow write: if false;
+    }
+  }
+}
