@@ -5,6 +5,13 @@ export default function LandingPage({ onNavigate, isAuthenticated }) {
   return (
     <div className="landing-container animate-fade-in-up">
       <section className="landing-hero">
+        <div className="author-badge">
+          <span className="author-label">Autor:</span>
+          <span className="author-value">José Luis Astudillo Romero</span>
+          <span className="badge-divider">•</span>
+          <span className="author-label">Año de creación:</span>
+          <span className="author-value">2026</span>
+        </div>
         <span className="landing-tagline">Prototipo IoT de Contaminación Sonora</span>
         <h1 className="landing-title">Monitoreo Acústico Inteligente en Tiempo Real</h1>
         <p className="landing-description">

@@ -1,11 +1,6 @@
-/**
+/** 
  * PROYECTO IoT: Monitoreo de Contaminación Sonora (AcousticIoT)
  * Archivo: esp32-sound-sensor.ino
- * 
- * Descripción:
- * Código C++ para microcontroladores ESP32. Se conecta a una red WiFi y
- * lee periódicamente el canal analógico ADC del sensor de sonido para
- * enviar los datos brutos a la API HTTP expuesta por Firebase Cloud Functions.
  */
 
 #include <WiFi.h>
@@ -13,21 +8,18 @@
 #include <WiFiClientSecure.h>
 
 // ==================== CONFIGURACIÓN DE RED WIFI ====================
-const char* ssid = "TU_SSID_WIFI";
-const char* password = "TU_PASSWORD_WIFI";
+const char* ssid = "Nettplus_Astudillo Romero";
+const char* password = "19_03_1953";
 
 // ==================== CONFIGURACIÓN DE ENDPOINT ====================
-// Reemplaza esta URL con el endpoint HTTPS generado al desplegar tu Firebase Cloud Function
-// Ejemplo: "https://postsounddata-xyz123abc-uc.a.run.app"
-const char* cloudFunctionUrl = "https://TU_CLOUD_FUNCTION_URL_AQUI/postSoundData";
+const char* cloudFunctionUrl = "https://us-central1-dashboard-iot-antigravity302.cloudfunctions.net/postSoundData";
 
 // ==================== CONFIGURACIÓN DE HARDWARE ====================
-// El ESP32 tiene un ADC de 12 bits (rango de lectura analógica: 0 a 4095)
-const int sensorPin = 34; // Pin analógico ADC donde está conectado el sensor de sonido (KY-037, MAX9814, etc.)
-const char* deviceId = "esp32_01"; // Identificador de este dispositivo
+const int sensorPin = 34; // Pin analógico ADC
+const char* deviceId = "esp32_01";
 
-// Intervalo de envío de datos (milisegundos) - Ejemplo: cada 10 segundos
-const unsigned long sendInterval = 10000;
+// Intervalo de envío de datos (milisegundos) - Cada 5 segundos para mejor respuesta
+const unsigned long sendInterval = 5000; 
 unsigned long lastSendTime = 0;
 
 void setup() {
@@ -60,29 +52,46 @@ void loop() {
     lastSendTime = currentMillis;
 
     if (WiFi.status() == WL_CONNECTED) {
-      // 1. Leer el promedio de la amplitud de sonido analógica para amortiguar picos
-      long sum = 0;
-      const int numSamples = 50;
-      for (int i = 0; i < numSamples; i++) {
-        sum += analogRead(sensorPin);
-        delay(5); // Pequeña pausa entre muestras
-      }
-      int avgReading = sum / numSamples;
       
-      Serial.print("Lectura analógica promedio (0-4095): ");
-      Serial.println(avgReading);
+      // =========================================================================
+      // 1. CAPTURA DE AMPLITUD (PICO A PICO) EN LUGAR DE PROMEDIO
+      // =========================================================================
+      unsigned long sampleWindow = 100; // Muestrear durante 100 ms continuos
+      unsigned long startMillis = millis();
 
+      int signalMax = 0;
+      int signalMin = 4095;
+
+      while (millis() - startMillis < sampleWindow) {
+        int sample = analogRead(sensorPin);
+        if (sample < 4095) {
+          if (sample > signalMax) {
+            signalMax = sample; // Almacena la onda más alta
+          }
+          if (sample < signalMin) {
+            signalMin = sample; // Almacena la onda más baja
+          }
+        }
+      }
+
+      // La amplitud real del ruido es la diferencia entre el valor más alto y más bajo
+      int rawReading = signalMax - signalMin; 
+      
+      Serial.print("Amplitud Pico a Pico capturada (0-4095): ");
+      Serial.println(rawReading);
+
+      // =========================================================================
       // 2. Preparar el cliente HTTPS seguro
+      // =========================================================================
       WiFiClientSecure client;
-      client.setInsecure(); // Desactivar verificación estricta de SSL para simplificar el prototipo
+      client.setInsecure();
 
       HTTPClient http;
       http.begin(client, cloudFunctionUrl);
       http.addHeader("Content-Type", "application/json");
 
       // 3. Crear el payload JSON a enviar
-      // Formato: {"deviceId": "esp32_01", "rawReading": X}
-      String jsonPayload = "{\"deviceId\":\"" + String(deviceId) + "\",\"rawReading\":" + String(avgReading) + "}";
+      String jsonPayload = "{\"deviceId\":\"" + String(deviceId) + "\",\"rawReading\":" + String(rawReading) + "}";
 
       Serial.print("Enviando POST payload: ");
       Serial.println(jsonPayload);
