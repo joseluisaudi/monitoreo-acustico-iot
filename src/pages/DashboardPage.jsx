@@ -1,15 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../firebase';
 import { collection, query, orderBy, limit, onSnapshot } from 'firebase/firestore';
-import { 
-  ResponsiveContainer, 
-  AreaChart, 
-  Area, 
-  XAxis, 
-  YAxis, 
-  CartesianGrid, 
-  Tooltip 
-} from 'recharts';
+// Recharts eliminado para usar Chart.js vía CDN
 import { 
   Volume2, 
   TrendingUp, 
@@ -24,6 +16,23 @@ export default function DashboardPage() {
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [isUsingMock, setIsUsingMock] = useState(false);
+  
+  const chartInstanceRef = React.useRef(null);
+
+  // Limpiar el canvas duplicado de index.html y destruir el gráfico al desmontar
+  useEffect(() => {
+    const duplicateCanvas = document.querySelector('body > .seccion-monitoreo');
+    if (duplicateCanvas) {
+      duplicateCanvas.remove();
+    }
+
+    return () => {
+      if (chartInstanceRef.current) {
+        chartInstanceRef.current.destroy();
+        chartInstanceRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     let unsubscribe = () => {};
@@ -56,6 +65,81 @@ export default function DashboardPage() {
         setLogs(sortedData);
         setLoading(false);
         setIsUsingMock(false);
+
+        // --- ACTUALIZACIÓN DE CHART.JS EN TIEMPO REAL ---
+        const ctx = document.getElementById('miGrafico');
+        if (ctx) {
+          if (!chartInstanceRef.current) {
+            // Inicializar una gráfica de líneas de Chart.js referenciando el canvas 'miGrafico'
+            // Define la estructura base con un dataset para el nivel de ruido/sonido (eje Y) y etiquetas de tiempo (eje X)
+            const initialLogs = sortedData.slice(-10);
+            chartInstanceRef.current = new window.Chart(ctx, {
+              type: 'line',
+              data: {
+                labels: initialLogs.map(log => log.time),
+                datasets: [{
+                  label: 'Nivel de Ruido (dB)',
+                  data: initialLogs.map(log => log.decibels),
+                  borderColor: '#06b6d4', // var(--secondary)
+                  backgroundColor: 'rgba(6, 182, 212, 0.1)',
+                  borderWidth: 2,
+                  tension: 0.3,
+                  fill: true,
+                  pointBackgroundColor: '#06b6d4',
+                  pointBorderColor: '#080C14',
+                  pointBorderWidth: 1.5,
+                  pointRadius: 4,
+                  pointHoverRadius: 6
+                }]
+              },
+              options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                  y: {
+                    min: 10,
+                    max: 100,
+                    grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                    ticks: { color: '#9CA3AF', font: { family: 'Inter', size: 11 } }
+                  },
+                  x: {
+                    grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                    ticks: { color: '#9CA3AF', font: { family: 'Inter', size: 11 } }
+                  }
+                },
+                plugins: {
+                  legend: { display: false }
+                }
+              }
+            });
+            // Guardar el último ID graficado para evitar duplicaciones
+            if (initialLogs.length > 0) {
+              chartInstanceRef.current.data.datasets[0]._lastLoggedId = initialLogs[initialLogs.length - 1].id;
+            }
+          } else {
+            // En cada nueva lectura (dentro del oyente de Firebase)
+            const latestLog = sortedData[sortedData.length - 1];
+            if (latestLog) {
+              const currentDataset = chartInstanceRef.current.data.datasets[0];
+              if (currentDataset._lastLoggedId !== latestLog.id) {
+                // Actualiza el gráfico agregando la lectura de ruido y el tiempo actual (toLocaleTimeString)
+                const currentLabel = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                chartInstanceRef.current.data.labels.push(currentLabel);
+                currentDataset.data.push(latestLog.decibels);
+                currentDataset._lastLoggedId = latestLog.id;
+
+                // Mantiene un máximo de 10 puntos visibles en la gráfica (usa .shift() cuando se supere ese límite)
+                if (chartInstanceRef.current.data.labels.length > 10) {
+                  chartInstanceRef.current.data.labels.shift();
+                  currentDataset.data.shift();
+                }
+
+                // Ejecuta miGrafico.update() en cada nueva lectura
+                chartInstanceRef.current.update();
+              }
+            }
+          }
+        }
       }, (error) => {
         console.warn("Error en la conexión en tiempo real, cargando fallback local:", error);
         loadMockData();
@@ -89,12 +173,61 @@ export default function DashboardPage() {
         rawReading: Math.floor(Math.pow(10, (val - 20) / 20)), // Cálculo invertido aproximado
         decibels: val,
         status: status,
-        time: new Date(timeOffset).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        time: new Date(timeOffset).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
         rawTime: timeOffset
       });
     });
 
     setLogs(mockData);
+
+    // Inicializar el gráfico con los datos simulados locales
+    setTimeout(() => {
+      const ctx = document.getElementById('miGrafico');
+      if (ctx) {
+        if (chartInstanceRef.current) {
+          chartInstanceRef.current.destroy();
+        }
+        chartInstanceRef.current = new window.Chart(ctx, {
+          type: 'line',
+          data: {
+            labels: mockData.map(log => log.time),
+            datasets: [{
+              label: 'Nivel de Ruido (dB)',
+              data: mockData.map(log => log.decibels),
+              borderColor: '#06b6d4',
+              backgroundColor: 'rgba(6, 182, 212, 0.1)',
+              borderWidth: 2,
+              tension: 0.3,
+              fill: true,
+              pointBackgroundColor: '#06b6d4',
+              pointBorderColor: '#080C14',
+              pointBorderWidth: 1.5,
+              pointRadius: 4
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+              y: {
+                min: 10,
+                max: 100,
+                grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                ticks: { color: '#9CA3AF', font: { family: 'Inter', size: 11 } }
+              },
+              x: {
+                grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                ticks: { color: '#9CA3AF', font: { family: 'Inter', size: 11 } }
+              }
+            },
+            plugins: {
+              legend: { display: false }
+            }
+          }
+        });
+        chartInstanceRef.current.data.datasets[0]._lastLoggedId = mockData[mockData.length - 1].id;
+      }
+    }, 100);
   };
 
   // Cálculos estadísticos basados en los logs actuales
@@ -120,30 +253,7 @@ export default function DashboardPage() {
 
   const { current, average, max, status } = getMetrics();
 
-  // Formato del tooltip del gráfico
-  const CustomTooltip = ({ active, payload }) => {
-    if (active && payload && payload.length) {
-      const data = payload[0].payload;
-      return (
-        <div style={{
-          background: 'rgba(15, 23, 42, 0.95)',
-          border: '1px solid var(--border-color)',
-          padding: '12px',
-          borderRadius: '8px',
-          boxShadow: 'var(--shadow-premium)'
-        }}>
-          <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '4px' }}>Hora: {data.time}</p>
-          <p style={{ fontWeight: '600', color: 'var(--secondary)' }}>Nivel: {data.decibels} dB</p>
-          <p style={{ fontSize: '0.8rem', textTransform: 'uppercase', fontWeight: '700', 
-            color: data.status === 'danger' ? 'var(--status-danger)' : data.status === 'warning' ? 'var(--status-warning)' : 'var(--status-normal)'
-          }}>
-            Estado: {data.status}
-          </p>
-        </div>
-      );
-    }
-    return null;
-  };
+  // Recharts CustomTooltip eliminado (se utiliza el tooltip nativo de Chart.js)
 
   return (
     <div className="dashboard-view animate-fade-in-up">
@@ -218,49 +328,27 @@ export default function DashboardPage() {
         {/* Gráfico de Línea Temporal */}
         <div className="chart-card glass-card">
           <h3 className="chart-title">Comportamiento del Nivel de Sonido (dB)</h3>
-          <div style={{ width: '100%', height: '100%', minHeight: '300px' }}>
-            {loading ? (
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)' }}>
+          <div style={{ width: '100%', height: '100%', minHeight: '300px', position: 'relative' }}>
+            {loading && (
+              <div style={{ 
+                position: 'absolute', 
+                top: 0, 
+                left: 0, 
+                width: '100%', 
+                height: '100%', 
+                display: 'flex', 
+                alignItems: 'center', 
+                justifyContent: 'center', 
+                background: 'rgba(8, 12, 20, 0.7)',
+                color: 'var(--text-muted)',
+                zIndex: 10
+              }}>
                 Cargando gráfico...
               </div>
-            ) : logs.length === 0 ? (
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)' }}>
-                No hay datos suficientes para graficar
-              </div>
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={logs} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="colorDb" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="var(--secondary)" stopOpacity={0.4}/>
-                      <stop offset="95%" stopColor="var(--secondary)" stopOpacity={0.0}/>
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                  <XAxis 
-                    dataKey="time" 
-                    stroke="var(--text-muted)" 
-                    fontSize={11}
-                    tickLine={false}
-                  />
-                  <YAxis 
-                    stroke="var(--text-muted)" 
-                    fontSize={11}
-                    domain={[10, 100]}
-                    tickLine={false}
-                  />
-                  <Tooltip content={<CustomTooltip />} />
-                  <Area 
-                    type="monotone" 
-                    dataKey="decibels" 
-                    stroke="var(--secondary)" 
-                    strokeWidth={2}
-                    fillOpacity={1} 
-                    fill="url(#colorDb)" 
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
             )}
+            <div style={{ width: '100%', height: '280px', position: 'relative' }}>
+              <canvas id="miGrafico" width="400" height="200"></canvas>
+            </div>
           </div>
         </div>
 

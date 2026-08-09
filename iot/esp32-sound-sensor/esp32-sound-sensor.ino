@@ -1,25 +1,29 @@
-/** 
+/**
  * PROYECTO IoT: Monitoreo de Contaminación Sonora (AcousticIoT)
  * Archivo: esp32-sound-sensor.ino
  */
 
-#include <WiFi.h>
 #include <HTTPClient.h>
+#include <WiFi.h>
 #include <WiFiClientSecure.h>
 
+
 // ==================== CONFIGURACIÓN DE RED WIFI ====================
-const char* ssid = "Nettplus_Astudillo Romero";
-const char* password = "19_03_1953";
+const char *ssid = "Nettplus_Astudillo Romero";
+const char *password = "19_03_1953";
 
 // ==================== CONFIGURACIÓN DE ENDPOINT ====================
-const char* cloudFunctionUrl = "https://us-central1-dashboard-iot-antigravity302.cloudfunctions.net/postSoundData";
+const char *cloudFunctionUrl =
+    "https://us-central1-dashboard-iot-antigravity302.cloudfunctions.net/"
+    "postSoundData";
 
 // ==================== CONFIGURACIÓN DE HARDWARE ====================
 const int sensorPin = 34; // Pin analógico ADC
-const char* deviceId = "esp32_01";
+const char *deviceId = "esp32_01";
 
-// Intervalo de envío de datos (milisegundos) - Cada 5 segundos para mejor respuesta
-const unsigned long sendInterval = 5000; 
+// Intervalo de envío de datos (milisegundos) - Cada 5 segundos para mejor
+// respuesta
+const unsigned long sendInterval = 5000;
 unsigned long lastSendTime = 0;
 
 void setup() {
@@ -30,7 +34,7 @@ void setup() {
   Serial.println();
   Serial.print("Conectando a red WiFi: ");
   Serial.println(ssid);
-  
+
   WiFi.begin(ssid, password);
 
   while (WiFi.status() != WL_CONNECTED) {
@@ -52,7 +56,7 @@ void loop() {
     lastSendTime = currentMillis;
 
     if (WiFi.status() == WL_CONNECTED) {
-      
+
       // =========================================================================
       // 1. CAPTURA DE AMPLITUD (PICO A PICO) EN LUGAR DE PROMEDIO
       // =========================================================================
@@ -74,9 +78,10 @@ void loop() {
         }
       }
 
-      // La amplitud real del ruido es la diferencia entre el valor más alto y más bajo
-      int rawReading = signalMax - signalMin; 
-      
+      // La amplitud real del ruido es la diferencia entre el valor más alto y
+      // más bajo
+      int rawReading = signalMax - signalMin;
+
       Serial.print("Amplitud Pico a Pico capturada (0-4095): ");
       Serial.println(rawReading);
 
@@ -91,7 +96,8 @@ void loop() {
       http.addHeader("Content-Type", "application/json");
 
       // 3. Crear el payload JSON a enviar
-      String jsonPayload = "{\"deviceId\":\"" + String(deviceId) + "\",\"rawReading\":" + String(rawReading) + "}";
+      String jsonPayload = "{\"deviceId\":\"" + String(deviceId) +
+                           "\",\"rawReading\":" + String(rawReading) + "}";
 
       Serial.print("Enviando POST payload: ");
       Serial.println(jsonPayload);
