@@ -12,6 +12,36 @@ import {
   Info 
 } from 'lucide-react';
 
+// ==================== CONFIGURACIÓN DE ALERTAS DE TELEGRAM ====================
+const TELEGRAM_BOT_TOKEN = "8689475771:AAFWLVi4-Olq4kepi20E57WF-D1BHzQcjwQ";
+const TELEGRAM_CHAT_ID = "8761204101";
+const UMBRAL_RUIDO = 75;
+let alertaEnviada = false;
+
+/**
+ * Función para enviar una alerta a Telegram cuando el ruido supera el umbral permitido.
+ * @param {number} nivelRuido - El valor actual del ruido en decibelios.
+ */
+function enviarAlertaTelegram(nivelRuido) {
+  const mensajeText = `⚠️ ¡Alerta de Contaminación Sonora! El nivel de ruido ha superado el umbral de ${UMBRAL_RUIDO} dB. Valor actual: ${nivelRuido} dB.`;
+  const mensaje = encodeURIComponent(mensajeText);
+  const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage?chat_id=${TELEGRAM_CHAT_ID}&text=${mensaje}`;
+
+  fetch(url, {
+    method: 'POST'
+  })
+  .then(response => {
+    if (!response.ok) {
+      console.error("Error al enviar alerta a Telegram:", response.statusText);
+    } else {
+      console.log("Alerta de Telegram enviada exitosamente.");
+    }
+  })
+  .catch(error => {
+    console.error("Error de red al enviar alerta a Telegram:", error);
+  });
+}
+
 export default function DashboardPage() {
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -21,6 +51,8 @@ export default function DashboardPage() {
 
   // Limpiar el canvas duplicado de index.html y destruir el gráfico al desmontar
   useEffect(() => {
+    alertaEnviada = false; // Resetear bandera de alerta en el montaje
+
     const duplicateCanvas = document.querySelector('body > .seccion-monitoreo');
     if (duplicateCanvas) {
       duplicateCanvas.remove();
@@ -65,6 +97,18 @@ export default function DashboardPage() {
         setLogs(sortedData);
         setLoading(false);
         setIsUsingMock(false);
+
+        // --- LÓGICA DE CONTROL DE FLUJO ANTI-SPAM DE TELEGRAM ---
+        const latestLog = sortedData[sortedData.length - 1];
+        if (latestLog) {
+          const valorRuido = latestLog.decibels;
+          if (valorRuido > UMBRAL_RUIDO && !alertaEnviada) {
+            enviarAlertaTelegram(valorRuido);
+            alertaEnviada = true;
+          } else if (valorRuido <= UMBRAL_RUIDO) {
+            alertaEnviada = false;
+          }
+        }
 
         // --- ACTUALIZACIÓN DE CHART.JS EN TIEMPO REAL ---
         const ctx = document.getElementById('miGrafico');
