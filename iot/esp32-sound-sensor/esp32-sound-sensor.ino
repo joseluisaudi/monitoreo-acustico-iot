@@ -9,8 +9,8 @@
 
 
 // ==================== CONFIGURACIÓN DE RED WIFI ====================
-const char *ssid = "Nettplus_Astudillo Romero";
-const char *password = "19_03_1953";
+const char *ssid = "HUAWEI P30 lite";
+const char *password = "16dda921c8c7";
 
 // ==================== CONFIGURACIÓN DE ENDPOINT ====================
 const char *cloudFunctionUrl =

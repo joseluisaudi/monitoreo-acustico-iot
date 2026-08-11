@@ -16,7 +16,8 @@ import {
 const TELEGRAM_BOT_TOKEN = "8689475771:AAFWLVi4-Olq4kepi20E57WF-D1BHzQcjwQ";
 const TELEGRAM_CHAT_ID = "8761204101";
 const UMBRAL_RUIDO = 75;
-let alertaEnviada = false;
+let ultimoLogIdProcesado = null;
+let ultimaAlertaChainStart = null;
 
 /**
  * Función para enviar una alerta a Telegram cuando el ruido supera el umbral permitido.
@@ -51,7 +52,8 @@ export default function DashboardPage() {
 
   // Limpiar el canvas duplicado de index.html y destruir el gráfico al desmontar
   useEffect(() => {
-    alertaEnviada = false; // Resetear bandera de alerta en el montaje
+    ultimoLogIdProcesado = null;
+    ultimaAlertaChainStart = null;
 
     const duplicateCanvas = document.querySelector('body > .seccion-monitoreo');
     if (duplicateCanvas) {
@@ -100,13 +102,40 @@ export default function DashboardPage() {
 
         // --- LÓGICA DE CONTROL DE FLUJO ANTI-SPAM DE TELEGRAM ---
         const latestLog = sortedData[sortedData.length - 1];
-        if (latestLog) {
+        if (latestLog && latestLog.id !== ultimoLogIdProcesado) {
+          ultimoLogIdProcesado = latestLog.id;
+
           const valorRuido = latestLog.decibels;
-          if (valorRuido > UMBRAL_RUIDO && !alertaEnviada) {
-            enviarAlertaTelegram(valorRuido);
-            alertaEnviada = true;
-          } else if (valorRuido <= UMBRAL_RUIDO) {
-            alertaEnviada = false;
+          const esFresco = Date.now() - latestLog.rawTime < 30000; // Solo procesar si el log es de los últimos 30 segundos (evita alertas al iniciar)
+
+          if (esFresco && valorRuido > UMBRAL_RUIDO) {
+            // Encontrar el inicio de la cadena contigua de exceso de ruido
+            let oldestChainLog = latestLog;
+            for (let i = sortedData.length - 2; i >= 0; i--) {
+              const current = sortedData[i];
+              const next = sortedData[i + 1];
+
+              // Si la lectura no supera el umbral, se rompe la cadena
+              if (current.decibels <= UMBRAL_RUIDO) {
+                break;
+              }
+              // Si hay un hueco temporal de más de 15 segundos entre lecturas, se rompe la cadena
+              if (next.rawTime - current.rawTime > 15000) {
+                break;
+              }
+
+              oldestChainLog = current;
+            }
+
+            const duracionExcesoMs = latestLog.rawTime - oldestChainLog.rawTime;
+
+            // Si el exceso de ruido lleva al menos 10 segundos continuos
+            if (duracionExcesoMs >= 10000) {
+              if (ultimaAlertaChainStart !== oldestChainLog.rawTime) {
+                enviarAlertaTelegram(valorRuido);
+                ultimaAlertaChainStart = oldestChainLog.rawTime;
+              }
+            }
           }
         }
 
