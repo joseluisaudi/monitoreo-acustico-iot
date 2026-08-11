@@ -103,8 +103,8 @@ export default function DashboardPage() {
         throw new Error("Credenciales de Firebase no configuradas. Usando datos de simulación local.");
       }
 
-      // Traer los últimos 50 registros para el gráfico y análisis en tiempo real
-      const q = query(collection(db, 'noise_logs'), orderBy('timestamp', 'desc'), limit(50));
+      // Traer los últimos 150 registros para el gráfico y análisis en tiempo real
+      const q = query(collection(db, 'noise_logs'), orderBy('timestamp', 'desc'), limit(150));
       
       unsubscribe = onSnapshot(q, (snapshot) => {
         const data = snapshot.docs.map(doc => {
@@ -134,6 +134,58 @@ export default function DashboardPage() {
 
           const valorRuido = latestLog.decibels;
           const esFresco = Date.now() - latestLog.rawTime < 30000; // Solo procesar si el log es de los últimos 30 segundos (evita alertas al iniciar)
+
+          // 0. Verificar si nos hemos recuperado (entrado a Fase de Silencio/Bajo Ruido) desde que empezó el ruido persistente
+          if (ultimoInicioRuidoPersistente !== null) {
+            let seHaRecuperado = false;
+            for (let d = 0; d < sortedData.length; d++) {
+              const currentLog = sortedData[d];
+              if (currentLog.rawTime < ultimoInicioRuidoPersistente) {
+                continue; // La recuperación debe ser posterior al inicio del ruido persistente
+              }
+
+              const esPrimeraCaida = currentLog.decibels <= UMBRAL_RUIDO && (d === 0 || sortedData[d - 1].decibels > UMBRAL_RUIDO);
+              if (esPrimeraCaida) {
+                const W_start = currentLog.rawTime;
+                const W_end = W_start + 10000;
+
+                let lowDurationMs = 0;
+                let gapsDetected = false;
+
+                for (let k = d; k < sortedData.length; k++) {
+                  const t_curr = sortedData[k].rawTime;
+                  if (t_curr >= W_end) {
+                    break;
+                  }
+
+                  let t_next = (k < sortedData.length - 1) ? sortedData[k + 1].rawTime : W_end;
+                  if (t_next > W_end) {
+                    t_next = W_end;
+                  }
+
+                  const interval = t_next - t_curr;
+                  if (interval > 15000) {
+                    gapsDetected = true;
+                    break;
+                  }
+
+                  if (sortedData[k].decibels <= UMBRAL_RUIDO) {
+                    lowDurationMs += interval;
+                  }
+                }
+
+                if (!gapsDetected && lowDurationMs >= 6000) {
+                  seHaRecuperado = true;
+                  break;
+                }
+              }
+            }
+
+            if (seHaRecuperado) {
+              ultimoInicioRuidoPersistente = null;
+              ultimoMilestoneAlertaPersistente = 0;
+            }
+          }
 
           if (esFresco && valorRuido > UMBRAL_RUIDO) {
             // 1. Encontrar el inicio de la cadena contigua de exceso de ruido (>75 dB)
@@ -211,111 +263,67 @@ export default function DashboardPage() {
               if (hasPrevLowNoise && ultimaAlertaChainStart !== oldestHighLog.rawTime) {
                 enviarAlertaTelegram(valorRuido);
                 ultimaAlertaChainStart = oldestHighLog.rawTime;
+
+                // Anclar el inicio del ruido persistente si no estaba iniciado
+                if (ultimoInicioRuidoPersistente === null) {
+                  ultimoInicioRuidoPersistente = oldestHighLog.rawTime;
+                  ultimoMilestoneAlertaPersistente = 0;
+                }
               }
             }
 
             // 5. Lógica de escala / alerta persistente (si lleva >= 120s en exceso de ruido sin silenciarse)
-            // Encontrar el inicio de la época actual sin silencio/recuperación
-            let T_epoch_start = sortedData[0].rawTime;
-            
-            // Buscamos la última ventana de recuperación válida que haya terminado antes del exceso actual
-            for (let d = highChainStartIndex - 1; d >= 0; d--) {
-              const currentLog = sortedData[d];
-              const esPrimeraCaida = currentLog.decibels <= UMBRAL_RUIDO && (d === 0 || sortedData[d - 1].decibels > UMBRAL_RUIDO);
+            if (ultimoInicioRuidoPersistente !== null) {
+              const totalPeriodMs = latestLog.rawTime - ultimoInicioRuidoPersistente;
+              const elapsedSeconds = Math.round(totalPeriodMs / 1000);
 
-              if (esPrimeraCaida) {
-                const W_start = currentLog.rawTime;
-                const W_end = W_start + 10000;
-                
-                if (W_end <= oldestHighLog.rawTime) {
-                  let lowDurationMs = 0;
-                  let gapsDetected = false;
+              if (elapsedSeconds >= 120) {
+                // Calcular qué porcentaje del tiempo ha estado por encima de 75dB durante este período (rango visible)
+                const T_start_calculo = Math.max(ultimoInicioRuidoPersistente, sortedData[0].rawTime);
+                let highDurationMs = 0;
+                let periodCalculadoMs = latestLog.rawTime - T_start_calculo;
 
-                  for (let k = d; k < sortedData.length; k++) {
+                if (periodCalculadoMs > 0) {
+                  for (let k = 0; k < sortedData.length; k++) {
                     const t_curr = sortedData[k].rawTime;
-                    if (t_curr >= W_end) {
-                      break;
+                    if (t_curr < T_start_calculo || t_curr >= latestLog.rawTime) {
+                      continue;
                     }
 
-                    let t_next = (k < sortedData.length - 1) ? sortedData[k + 1].rawTime : W_end;
-                    if (t_next > W_end) {
-                      t_next = W_end;
+                    let t_next = (k < sortedData.length - 1) ? sortedData[k + 1].rawTime : latestLog.rawTime;
+                    if (t_next > latestLog.rawTime) {
+                      t_next = latestLog.rawTime;
                     }
 
                     const interval = t_next - t_curr;
-                    if (interval > 15000) {
-                      gapsDetected = true;
-                      break;
-                    }
-
-                    if (sortedData[k].decibels <= UMBRAL_RUIDO) {
-                      lowDurationMs += interval;
+                    if (sortedData[k].decibels > UMBRAL_RUIDO) {
+                      highDurationMs += interval;
                     }
                   }
+                }
 
-                  if (!gapsDetected && lowDurationMs >= 6000) {
-                    // La época sin silencio comienza con el primer log > 75dB después de esta ventana de recuperación
-                    for (let idx = d; idx < sortedData.length; idx++) {
-                      if (sortedData[idx].rawTime >= W_end && sortedData[idx].decibels > UMBRAL_RUIDO) {
-                        T_epoch_start = sortedData[idx].rawTime;
-                        break;
+                const ratioExceso = periodCalculadoMs > 0 ? (highDurationMs / periodCalculadoMs) : 0;
+
+                // Si el nivel de ruido ha estado mayormente (>50%) por encima de 75dB en la parte visible
+                if (ratioExceso >= 0.5) {
+                  const currentMilestone = Math.floor(elapsedSeconds / 120) * 120;
+
+                  if (currentMilestone > ultimoMilestoneAlertaPersistente) {
+                    const minutos = Math.floor(elapsedSeconds / 60);
+                    const segundos = elapsedSeconds % 60;
+                    let tiempoFormateado = "";
+                    if (minutos > 0) {
+                      tiempoFormateado += `${minutos} minuto${minutos !== 1 ? 's' : ''}`;
+                      if (segundos > 0) {
+                        tiempoFormateado += ` y ${segundos} segundo${segundos !== 1 ? 's' : ''}`;
                       }
+                    } else {
+                      tiempoFormateado += `${segundos} segundo${segundos !== 1 ? 's' : ''}`;
                     }
-                    break;
+
+                    enviarAlertaPersistenteTelegram(valorRuido, tiempoFormateado);
+                    ultimoMilestoneAlertaPersistente = currentMilestone;
                   }
-                }
-              }
-            }
-
-            const totalPeriodMs = latestLog.rawTime - T_epoch_start;
-            const elapsedSeconds = Math.round(totalPeriodMs / 1000);
-
-            if (elapsedSeconds >= 120) {
-              // Calcular qué porcentaje del tiempo ha estado por encima de 75dB durante este período
-              let highDurationMs = 0;
-              for (let k = 0; k < sortedData.length; k++) {
-                const t_curr = sortedData[k].rawTime;
-                if (t_curr < T_epoch_start || t_curr >= latestLog.rawTime) {
-                  continue;
-                }
-                
-                let t_next = (k < sortedData.length - 1) ? sortedData[k + 1].rawTime : latestLog.rawTime;
-                if (t_next > latestLog.rawTime) {
-                  t_next = latestLog.rawTime;
-                }
-                
-                const interval = t_next - t_curr;
-                if (sortedData[k].decibels > UMBRAL_RUIDO) {
-                  highDurationMs += interval;
-                }
-              }
-
-              const ratioExceso = totalPeriodMs > 0 ? (highDurationMs / totalPeriodMs) : 0;
-
-              // Si el nivel de ruido ha estado mayormente (>50%) por encima de 75dB
-              if (ratioExceso >= 0.5) {
-                const currentMilestone = Math.floor(elapsedSeconds / 120) * 120;
-
-                if (ultimoInicioRuidoPersistente !== T_epoch_start) {
-                  ultimoInicioRuidoPersistente = T_epoch_start;
-                  ultimoMilestoneAlertaPersistente = 0;
-                }
-
-                if (currentMilestone > ultimoMilestoneAlertaPersistente) {
-                  const minutos = Math.floor(elapsedSeconds / 60);
-                  const segundos = elapsedSeconds % 60;
-                  let tiempoFormateado = "";
-                  if (minutos > 0) {
-                    tiempoFormateado += `${minutos} minuto${minutos !== 1 ? 's' : ''}`;
-                    if (segundos > 0) {
-                      tiempoFormateado += ` y ${segundos} segundo${segundos !== 1 ? 's' : ''}`;
-                    }
-                  } else {
-                    tiempoFormateado += `${segundos} segundo${segundos !== 1 ? 's' : ''}`;
-                  }
-
-                  enviarAlertaPersistenteTelegram(valorRuido, tiempoFormateado);
-                  ultimoMilestoneAlertaPersistente = currentMilestone;
                 }
               }
             }
