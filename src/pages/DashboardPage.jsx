@@ -24,6 +24,7 @@ const getPersistedState = () => {
     ultimaAlertaChainStart: localStorage.getItem('ultimaAlertaChainStart') ? parseInt(localStorage.getItem('ultimaAlertaChainStart'), 10) : null,
     ultimoInicioRuidoPersistente: localStorage.getItem('ultimoInicioRuidoPersistente') ? parseInt(localStorage.getItem('ultimoInicioRuidoPersistente'), 10) : null,
     ultimoMilestoneAlertaPersistente: localStorage.getItem('ultimoMilestoneAlertaPersistente') ? parseInt(localStorage.getItem('ultimoMilestoneAlertaPersistente'), 10) : 0,
+    inicioEvaluacionRuido: localStorage.getItem('inicioEvaluacionRuido') ? parseInt(localStorage.getItem('inicioEvaluacionRuido'), 10) : null,
   };
 };
 
@@ -42,6 +43,10 @@ const setPersistedState = (state) => {
   }
   if (state.ultimoMilestoneAlertaPersistente !== undefined) {
     localStorage.setItem('ultimoMilestoneAlertaPersistente', state.ultimoMilestoneAlertaPersistente.toString());
+  }
+  if (state.inicioEvaluacionRuido !== undefined) {
+    if (state.inicioEvaluacionRuido === null) localStorage.removeItem('inicioEvaluacionRuido');
+    else localStorage.setItem('inicioEvaluacionRuido', state.inicioEvaluacionRuido.toString());
   }
 };
 
@@ -98,6 +103,7 @@ export default function DashboardPage() {
   const [isUsingMock, setIsUsingMock] = useState(false);
   
   const chartInstanceRef = React.useRef(null);
+  const isFirstSnapshotRef = React.useRef(true);
 
   // Limpiar el canvas duplicado de index.html y destruir el gráfico al desmontar
   useEffect(() => {
@@ -145,73 +151,76 @@ export default function DashboardPage() {
         setLogs(sortedData);
         setLoading(false);
         setIsUsingMock(false);
-
         // --- LÓGICA DE CONTROL DE FLUJO ANTI-SPAM DE TELEGRAM ---
         const latestLog = sortedData[sortedData.length - 1];
         if (latestLog) {
           const state = getPersistedState();
 
-          if (latestLog.id !== state.ultimoLogIdProcesado) {
-            let nextState = { ultimoLogIdProcesado: latestLog.id };
+          if (isFirstSnapshotRef.current) {
+            // Carga inicial: no procesamos alertas, solo marcamos el último log id para evitar spam de históricos
+            setPersistedState({ ultimoLogIdProcesado: latestLog.id });
+            isFirstSnapshotRef.current = false;
+          } else {
+            if (latestLog.id !== state.ultimoLogIdProcesado) {
+              let nextState = { ultimoLogIdProcesado: latestLog.id };
+              const valorRuido = latestLog.decibels;
 
-            const valorRuido = latestLog.decibels;
-            const esFresco = Date.now() - latestLog.rawTime < 30000; // Solo procesar si el log es de los últimos 30 segundos (evita alertas al iniciar)
+              // 0. Verificar si nos hemos recuperado (entrado a Fase de Silencio/Bajo Ruido) desde que empezó el ruido persistente
+              if (state.ultimoInicioRuidoPersistente !== null) {
+                let seHaRecuperado = false;
+                for (let d = 0; d < sortedData.length; d++) {
+                  const currentLog = sortedData[d];
+                  if (currentLog.rawTime < state.ultimoInicioRuidoPersistente) {
+                    continue; // La recuperación debe ser posterior al inicio del ruido persistente
+                  }
 
-            // 0. Verificar si nos hemos recuperado (entrado a Fase de Silencio/Bajo Ruido) desde que empezó el ruido persistente
-            if (state.ultimoInicioRuidoPersistente !== null) {
-              let seHaRecuperado = false;
-              for (let d = 0; d < sortedData.length; d++) {
-                const currentLog = sortedData[d];
-                if (currentLog.rawTime < state.ultimoInicioRuidoPersistente) {
-                  continue; // La recuperación debe ser posterior al inicio del ruido persistente
+                  const esPrimeraCaida = currentLog.decibels <= UMBRAL_RUIDO && (d === 0 || sortedData[d - 1].decibels > UMBRAL_RUIDO);
+                  if (esPrimeraCaida) {
+                    const W_start = currentLog.rawTime;
+                    const W_end = W_start + 10000;
+
+                    let lowDurationMs = 0;
+                    let gapsDetected = false;
+
+                    for (let k = d; k < sortedData.length; k++) {
+                      const t_curr = sortedData[k].rawTime;
+                      if (t_curr >= W_end) {
+                        break;
+                      }
+
+                      let t_next = (k < sortedData.length - 1) ? sortedData[k + 1].rawTime : W_end;
+                      if (t_next > W_end) {
+                        t_next = W_end;
+                      }
+
+                      const interval = t_next - t_curr;
+                      if (interval > 15000) {
+                        gapsDetected = true;
+                        break;
+                      }
+
+                      if (sortedData[k].decibels <= UMBRAL_RUIDO) {
+                        lowDurationMs += interval;
+                      }
+                    }
+
+                    if (!gapsDetected && lowDurationMs >= 6000) {
+                      seHaRecuperado = true;
+                      break;
+                    }
+                  }
                 }
 
-                const esPrimeraCaida = currentLog.decibels <= UMBRAL_RUIDO && (d === 0 || sortedData[d - 1].decibels > UMBRAL_RUIDO);
-                if (esPrimeraCaida) {
-                  const W_start = currentLog.rawTime;
-                  const W_end = W_start + 10000;
-
-                  let lowDurationMs = 0;
-                  let gapsDetected = false;
-
-                  for (let k = d; k < sortedData.length; k++) {
-                    const t_curr = sortedData[k].rawTime;
-                    if (t_curr >= W_end) {
-                      break;
-                    }
-
-                    let t_next = (k < sortedData.length - 1) ? sortedData[k + 1].rawTime : W_end;
-                    if (t_next > W_end) {
-                      t_next = W_end;
-                    }
-
-                    const interval = t_next - t_curr;
-                    if (interval > 15000) {
-                      gapsDetected = true;
-                      break;
-                    }
-
-                    if (sortedData[k].decibels <= UMBRAL_RUIDO) {
-                      lowDurationMs += interval;
-                    }
-                  }
-
-                  if (!gapsDetected && lowDurationMs >= 6000) {
-                    seHaRecuperado = true;
-                    break;
-                  }
+                if (seHaRecuperado) {
+                  nextState.ultimoInicioRuidoPersistente = null;
+                  nextState.ultimoMilestoneAlertaPersistente = 0;
+                  nextState.inicioEvaluacionRuido = null;
+                  state.ultimoInicioRuidoPersistente = null;
+                  state.ultimoMilestoneAlertaPersistente = 0;
+                  state.inicioEvaluacionRuido = null;
                 }
               }
 
-              if (seHaRecuperado) {
-                nextState.ultimoInicioRuidoPersistente = null;
-                nextState.ultimoMilestoneAlertaPersistente = 0;
-                state.ultimoInicioRuidoPersistente = null;
-                state.ultimoMilestoneAlertaPersistente = 0;
-              }
-            }
-
-            if (esFresco) {
               // A. Iniciar el periodo de evaluación si detectamos el primer ruido > 75 dB
               // y no estamos en un ciclo de ruido persistente ya activo o con ventana ya iniciada.
               if (valorRuido > UMBRAL_RUIDO && state.ultimoInicioRuidoPersistente === null && state.inicioEvaluacionRuido === null) {
@@ -224,7 +233,8 @@ export default function DashboardPage() {
                 const elapsedMs = latestLog.rawTime - state.inicioEvaluacionRuido;
 
                 // Solo evaluar si ya transcurrieron al menos 30 segundos desde la primera lectura > 75 dB
-                if (elapsedMs >= 30000) {
+                // Usamos 28 segundos para ser tolerantes a pequeñas fluctuaciones/latencia del intervalo del sensor.
+                if (elapsedMs >= 28000) {
                   const W_start = state.inicioEvaluacionRuido;
                   const W_end = W_start + 30000;
 
@@ -342,10 +352,10 @@ export default function DashboardPage() {
                   }
                 }
               }
-            }
 
-            // Guardar el estado actualizado en localStorage
-            setPersistedState(nextState);
+              // Guardar el estado actualizado en localStorage
+              setPersistedState(nextState);
+            }
           }
         }
 
