@@ -18,6 +18,8 @@ const TELEGRAM_CHAT_ID = "8761204101";
 const UMBRAL_RUIDO = 75;
 let ultimoLogIdProcesado = null;
 let ultimaAlertaChainStart = null;
+let ultimoMilestoneAlertaPersistente = 0;
+let ultimoInicioRuidoPersistente = null;
 
 /**
  * Función para enviar una alerta a Telegram cuando el ruido supera el umbral permitido.
@@ -43,6 +45,29 @@ function enviarAlertaTelegram(nivelRuido) {
   });
 }
 
+/**
+ * Función para enviar una alerta persistente a Telegram cuando el ruido ha permanecido alto.
+ */
+function enviarAlertaPersistenteTelegram(nivelRuido, tiempoFormateado) {
+  const mensajeText = `🛑 Busque tomar urgentes medidas, el ruido se ha mantenido por un estratosférico período--ya va para ${tiempoFormateado} sin entrar a Fase de Silencio/Bajo Ruido. Valor actual: ${nivelRuido} dB.`;
+  const mensaje = encodeURIComponent(mensajeText);
+  const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage?chat_id=${TELEGRAM_CHAT_ID}&text=${mensaje}`;
+
+  fetch(url, {
+    method: 'POST'
+  })
+  .then(response => {
+    if (!response.ok) {
+      console.error("Error al enviar alerta persistente a Telegram:", response.statusText);
+    } else {
+      console.log("Alerta persistente de Telegram enviada exitosamente.");
+    }
+  })
+  .catch(error => {
+    console.error("Error de red al enviar alerta persistente a Telegram:", error);
+  });
+}
+
 export default function DashboardPage() {
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -54,6 +79,8 @@ export default function DashboardPage() {
   useEffect(() => {
     ultimoLogIdProcesado = null;
     ultimaAlertaChainStart = null;
+    ultimoMilestoneAlertaPersistente = 0;
+    ultimoInicioRuidoPersistente = null;
 
     const duplicateCanvas = document.querySelector('body > .seccion-monitoreo');
     if (duplicateCanvas) {
@@ -76,8 +103,8 @@ export default function DashboardPage() {
         throw new Error("Credenciales de Firebase no configuradas. Usando datos de simulación local.");
       }
 
-      // Traer los últimos 20 registros para el gráfico de tiempo real
-      const q = query(collection(db, 'noise_logs'), orderBy('timestamp', 'desc'), limit(20));
+      // Traer los últimos 50 registros para el gráfico y análisis en tiempo real
+      const q = query(collection(db, 'noise_logs'), orderBy('timestamp', 'desc'), limit(50));
       
       unsubscribe = onSnapshot(q, (snapshot) => {
         const data = snapshot.docs.map(doc => {
@@ -184,6 +211,112 @@ export default function DashboardPage() {
               if (hasPrevLowNoise && ultimaAlertaChainStart !== oldestHighLog.rawTime) {
                 enviarAlertaTelegram(valorRuido);
                 ultimaAlertaChainStart = oldestHighLog.rawTime;
+              }
+            }
+
+            // 5. Lógica de escala / alerta persistente (si lleva >= 120s en exceso de ruido sin silenciarse)
+            // Encontrar el inicio de la época actual sin silencio/recuperación
+            let T_epoch_start = sortedData[0].rawTime;
+            
+            // Buscamos la última ventana de recuperación válida que haya terminado antes del exceso actual
+            for (let d = highChainStartIndex - 1; d >= 0; d--) {
+              const currentLog = sortedData[d];
+              const esPrimeraCaida = currentLog.decibels <= UMBRAL_RUIDO && (d === 0 || sortedData[d - 1].decibels > UMBRAL_RUIDO);
+
+              if (esPrimeraCaida) {
+                const W_start = currentLog.rawTime;
+                const W_end = W_start + 10000;
+                
+                if (W_end <= oldestHighLog.rawTime) {
+                  let lowDurationMs = 0;
+                  let gapsDetected = false;
+
+                  for (let k = d; k < sortedData.length; k++) {
+                    const t_curr = sortedData[k].rawTime;
+                    if (t_curr >= W_end) {
+                      break;
+                    }
+
+                    let t_next = (k < sortedData.length - 1) ? sortedData[k + 1].rawTime : W_end;
+                    if (t_next > W_end) {
+                      t_next = W_end;
+                    }
+
+                    const interval = t_next - t_curr;
+                    if (interval > 15000) {
+                      gapsDetected = true;
+                      break;
+                    }
+
+                    if (sortedData[k].decibels <= UMBRAL_RUIDO) {
+                      lowDurationMs += interval;
+                    }
+                  }
+
+                  if (!gapsDetected && lowDurationMs >= 6000) {
+                    // La época sin silencio comienza con el primer log > 75dB después de esta ventana de recuperación
+                    for (let idx = d; idx < sortedData.length; idx++) {
+                      if (sortedData[idx].rawTime >= W_end && sortedData[idx].decibels > UMBRAL_RUIDO) {
+                        T_epoch_start = sortedData[idx].rawTime;
+                        break;
+                      }
+                    }
+                    break;
+                  }
+                }
+              }
+            }
+
+            const totalPeriodMs = latestLog.rawTime - T_epoch_start;
+            const elapsedSeconds = Math.round(totalPeriodMs / 1000);
+
+            if (elapsedSeconds >= 120) {
+              // Calcular qué porcentaje del tiempo ha estado por encima de 75dB durante este período
+              let highDurationMs = 0;
+              for (let k = 0; k < sortedData.length; k++) {
+                const t_curr = sortedData[k].rawTime;
+                if (t_curr < T_epoch_start || t_curr >= latestLog.rawTime) {
+                  continue;
+                }
+                
+                let t_next = (k < sortedData.length - 1) ? sortedData[k + 1].rawTime : latestLog.rawTime;
+                if (t_next > latestLog.rawTime) {
+                  t_next = latestLog.rawTime;
+                }
+                
+                const interval = t_next - t_curr;
+                if (sortedData[k].decibels > UMBRAL_RUIDO) {
+                  highDurationMs += interval;
+                }
+              }
+
+              const ratioExceso = totalPeriodMs > 0 ? (highDurationMs / totalPeriodMs) : 0;
+
+              // Si el nivel de ruido ha estado mayormente (>50%) por encima de 75dB
+              if (ratioExceso >= 0.5) {
+                const currentMilestone = Math.floor(elapsedSeconds / 120) * 120;
+
+                if (ultimoInicioRuidoPersistente !== T_epoch_start) {
+                  ultimoInicioRuidoPersistente = T_epoch_start;
+                  ultimoMilestoneAlertaPersistente = 0;
+                }
+
+                if (currentMilestone > ultimoMilestoneAlertaPersistente) {
+                  const minutos = Math.floor(elapsedSeconds / 60);
+                  const segundos = elapsedSeconds % 60;
+                  let tiempoFormateado = "";
+                  if (minutos > 0) {
+                    tiempoFormateado += `${minutos} minuto${minutos !== 1 ? 's' : ''}`;
+                    if (segundos > 0) {
+                      tiempoFormateado += ` y ${segundos} segundo${segundos !== 1 ? 's' : ''}`;
+                    }
+                  } else {
+                    tiempoFormateado += `${segundos} segundo${segundos !== 1 ? 's' : ''}`;
+                  }
+
+                  enviarAlertaPersistenteTelegram(valorRuido, tiempoFormateado);
+                  ultimoMilestoneAlertaPersistente = currentMilestone;
+                }
               }
             }
           }
