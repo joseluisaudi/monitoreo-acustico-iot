@@ -351,7 +351,7 @@
 }
 
 .chart-card {
-  height: 460px;
+  height: 500px;
   display: flex;
   flex-direction: column;
   gap: 16px;

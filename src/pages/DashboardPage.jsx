@@ -7,9 +7,7 @@ import {
   TrendingUp, 
   AlertTriangle, 
   CheckCircle, 
-  Activity, 
-  BarChart2, 
-  Info 
+  Activity
 } from 'lucide-react';
 
 // ==================== CONFIGURACIÓN DE ALERTAS DE TELEGRAM ====================
@@ -726,7 +724,7 @@ export default function DashboardPage() {
         {/* Gráfico de Línea Temporal */}
         <div className="chart-card glass-card">
           <h3 className="chart-title">Comportamiento del Nivel de Sonido (dB)</h3>
-          <div style={{ width: '100%', height: '100%', minHeight: '380px', position: 'relative' }}>
+          <div style={{ width: '100%', height: '100%', minHeight: '430px', position: 'relative' }}>
             {loading && (
               <div style={{ 
                 position: 'absolute', 
@@ -744,7 +742,7 @@ export default function DashboardPage() {
                 Cargando gráfico...
               </div>
             )}
-            <div style={{ width: '100%', height: '370px', position: 'relative' }}>
+            <div style={{ width: '100%', height: '420px', position: 'relative' }}>
               <canvas id="miGrafico"></canvas>
             </div>
           </div>
@@ -780,21 +778,6 @@ export default function DashboardPage() {
               <span>&gt; 75 dB: Daño auditivo latente</span>
             </div>
           </div>
-        </div>
-      </div>
-      
-      {/* Tarjeta Informativa sobre el proyecto */}
-      <div className="glass-card" style={{ display: 'flex', gap: '16px', alignItems: 'flex-start' }}>
-        <div className="feature-icon-container" style={{ margin: 0, flexShrink: 0 }}>
-          <Info size={20} />
-        </div>
-        <div>
-          <h4 style={{ fontFamily: 'var(--font-display)', fontSize: '1rem', fontWeight: '600', marginBottom: '4px' }}>¿Cómo se realiza el cálculo de decibelios?</h4>
-          <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)', lineHeight: '1.5' }}>
-            La Cloud Function recibe la lectura analógica directa del ESP32 (rango 0 a 4095) y le aplica la función de escala logarítmica acústica 
-            <code> dB = 20 * log10(Lectura_ADC) + 20</code>. Esto permite que una lectura cercana a 0 represente silencio (20 dB) y una lectura máxima 
-            de 4095 represente cerca de 92 dB (sonido alto o maquinaria industrial).
-          </p>
         </div>
       </div>
     </div>
