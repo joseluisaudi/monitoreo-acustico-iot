@@ -211,118 +211,129 @@ export default function DashboardPage() {
               }
             }
 
-            if (esFresco && valorRuido > UMBRAL_RUIDO) {
-              // 1. Calcular el estado de ruido mayormente (>50%) por encima de 75 dB en los últimos 30 segundos
-              const W_end = latestLog.rawTime;
-              const W_start = W_end - 30000; // ventana de 30 segundos
-
-              let highDurationMs = 0;
-              let totalDurationMs = 0;
-              let totalSamples = 0;
-              let highSamples = 0;
-
-              for (let k = 0; k < sortedData.length; k++) {
-                const log = sortedData[k];
-                
-                // Contar muestras dentro de la ventana de 30 segundos
-                if (log.rawTime >= W_start && log.rawTime <= W_end) {
-                  totalSamples++;
-                  if (log.decibels > UMBRAL_RUIDO) {
-                    highSamples++;
-                  }
-                }
-
-                // Calcular duración de los intervalos dentro de la ventana de 30 segundos
-                const t_curr = log.rawTime;
-                if (t_curr >= W_start && t_curr < W_end) {
-                  let t_next = (k < sortedData.length - 1) ? sortedData[k + 1].rawTime : W_end;
-                  if (t_next > W_end) {
-                    t_next = W_end;
-                  }
-                  
-                  const interval = t_next - t_curr;
-                  totalDurationMs += interval;
-                  if (log.decibels > UMBRAL_RUIDO) {
-                    highDurationMs += interval;
-                  }
-                }
+            if (esFresco) {
+              // A. Iniciar el periodo de evaluación si detectamos el primer ruido > 75 dB
+              // y no estamos en un ciclo de ruido persistente ya activo o con ventana ya iniciada.
+              if (valorRuido > UMBRAL_RUIDO && state.ultimoInicioRuidoPersistente === null && state.inicioEvaluacionRuido === null) {
+                nextState.inicioEvaluacionRuido = latestLog.rawTime;
+                state.inicioEvaluacionRuido = latestLog.rawTime; // Actualizar localmente para la evaluación en este mismo ciclo
               }
 
-              const ratioDuration = totalDurationMs > 0 ? (highDurationMs / totalDurationMs) : 0;
-              const ratioSamples = totalSamples > 0 ? (highSamples / totalSamples) : 0;
+              // B. Si hay una ventana de evaluación de 30 segundos activa
+              if (state.inicioEvaluacionRuido !== null) {
+                const elapsedMs = latestLog.rawTime - state.inicioEvaluacionRuido;
 
-              // Consideramos "mayormente" si:
-              // - El ratio de la duración con exceso es > 50%
-              // - O si la proporción de muestras altas es > 50%
-              // Además, requerimos al menos una duración total de exceso de 15 segundos o 2 muestras altas
-              // para asegurar estabilidad y evitar falsos positivos con muy pocos datos.
-              const esMayormenteExceso = (ratioDuration > 0.5 && highDurationMs >= 15000) || (ratioSamples > 0.5 && highSamples >= 2);
+                // Solo evaluar si ya transcurrieron al menos 30 segundos desde la primera lectura > 75 dB
+                if (elapsedMs >= 30000) {
+                  const W_start = state.inicioEvaluacionRuido;
+                  const W_end = W_start + 30000;
 
-              if (esMayormenteExceso) {
-                // Encontrar el log más antiguo de la ventana de 30 segundos
-                const logsEnVentana = sortedData.filter(log => log.rawTime >= W_start && log.rawTime <= W_end);
-                const oldestLogEnVentana = logsEnVentana.length > 0 ? logsEnVentana[0] : latestLog;
-                const oldestLogIndex = sortedData.findIndex(log => log.id === oldestLogEnVentana.id);
+                  let highDurationMs = 0;
+                  let totalDurationMs = 0;
+                  let totalSamples = 0;
+                  let highSamples = 0;
 
-                // 2. Verificar que PREVIAMENTE hubo un periodo de recuperación de bajo ruido
-                let hasPrevLowNoise = false;
-                if (oldestLogIndex > 0) {
-                  // Buscamos cualquier primera caída en el historial anterior al exceso
-                  for (let d = 0; d < oldestLogIndex; d++) {
-                    const currentLog = sortedData[d];
-                    const esPrimeraCaida = currentLog.decibels <= UMBRAL_RUIDO && (d === 0 || sortedData[d - 1].decibels > UMBRAL_RUIDO);
-
-                    if (esPrimeraCaida) {
-                      const W_start_rec = currentLog.rawTime;
-                      const W_end_rec = W_start_rec + 10000; // ventana de 10 segundos
-
-                      let lowDurationMs = 0;
-                      let gapsDetected = false;
-
-                      for (let k = d; k < sortedData.length; k++) {
-                        const t_curr = sortedData[k].rawTime;
-                        if (t_curr >= W_end_rec) {
-                          break;
-                        }
-
-                        let t_next = (k < sortedData.length - 1) ? sortedData[k + 1].rawTime : W_end_rec;
-                        if (t_next > W_end_rec) {
-                          t_next = W_end_rec;
-                        }
-
-                        const interval = t_next - t_curr;
-                        
-                        // Si hay una desconexión grande (>15s) entre lecturas, invalidamos la ventana
-                        if (interval > 15000) {
-                          gapsDetected = true;
-                          break;
-                        }
-
-                        if (sortedData[k].decibels <= UMBRAL_RUIDO) {
-                          lowDurationMs += interval;
-                        }
+                  for (let k = 0; k < sortedData.length; k++) {
+                    const log = sortedData[k];
+                    
+                    // Contar muestras dentro de la ventana de 30 segundos
+                    if (log.rawTime >= W_start && log.rawTime <= W_end) {
+                      totalSamples++;
+                      if (log.decibels > UMBRAL_RUIDO) {
+                        highSamples++;
                       }
+                    }
 
-                      // Si la mayoría del tiempo de la ventana (>= 6 segundos) fue de bajo ruido, y no hubo cortes
-                      if (!gapsDetected && lowDurationMs >= 6000) {
-                        hasPrevLowNoise = true;
-                        break; // Ya encontramos una ventana de recuperación válida previa
+                    // Calcular duración de los intervalos dentro de la ventana de 30 segundos
+                    const t_curr = log.rawTime;
+                    if (t_curr >= W_start && t_curr < W_end) {
+                      let t_next = (k < sortedData.length - 1) ? sortedData[k + 1].rawTime : W_end;
+                      if (t_next > W_end) {
+                        t_next = W_end;
+                      }
+                      
+                      const interval = t_next - t_curr;
+                      totalDurationMs += interval;
+                      if (log.decibels > UMBRAL_RUIDO) {
+                        highDurationMs += interval;
                       }
                     }
                   }
-                }
 
-                // 3. Si se cumple la condición previa de bajo ruido, no estamos en un ciclo de ruido persistente ya notificado
-                // y no hemos enviado una alerta para este log inicial de la ventana
-                if (hasPrevLowNoise && state.ultimoInicioRuidoPersistente === null && state.ultimaAlertaChainStart !== oldestLogEnVentana.rawTime) {
-                  enviarAlertaTelegram(valorRuido);
-                  nextState.ultimaAlertaChainStart = oldestLogEnVentana.rawTime;
+                  const ratioDuration = totalDurationMs > 0 ? (highDurationMs / totalDurationMs) : 0;
+                  const ratioSamples = totalSamples > 0 ? (highSamples / totalSamples) : 0;
 
-                  // Anclar el inicio del ruido persistente
-                  nextState.ultimoInicioRuidoPersistente = oldestLogEnVentana.rawTime;
-                  nextState.ultimoMilestoneAlertaPersistente = 0;
-                  state.ultimoInicioRuidoPersistente = oldestLogEnVentana.rawTime;
-                  state.ultimoMilestoneAlertaPersistente = 0;
+                  // Mayormente significa > 50%
+                  const esMayormenteExceso = ratioDuration > 0.5 || ratioSamples > 0.5;
+
+                  if (esMayormenteExceso) {
+                    // Encontrar el log correspondiente al inicio de la ventana
+                    const firstHighLogIndex = sortedData.findIndex(log => log.rawTime >= W_start);
+
+                    // 2. Verificar que PREVIAMENTE hubo un periodo de recuperación de bajo ruido
+                    let hasPrevLowNoise = false;
+                    if (firstHighLogIndex > 0) {
+                      // Buscamos cualquier primera caída en el historial anterior al exceso
+                      for (let d = 0; d < firstHighLogIndex; d++) {
+                        const currentLog = sortedData[d];
+                        const esPrimeraCaida = currentLog.decibels <= UMBRAL_RUIDO && (d === 0 || sortedData[d - 1].decibels > UMBRAL_RUIDO);
+
+                        if (esPrimeraCaida) {
+                          const W_start_rec = currentLog.rawTime;
+                          const W_end_rec = W_start_rec + 10000; // ventana de 10 segundos
+
+                          let lowDurationMs = 0;
+                          let gapsDetected = false;
+
+                          for (let k = d; k < sortedData.length; k++) {
+                            const t_curr = sortedData[k].rawTime;
+                            if (t_curr >= W_end_rec) {
+                              break;
+                            }
+
+                            let t_next = (k < sortedData.length - 1) ? sortedData[k + 1].rawTime : W_end_rec;
+                            if (t_next > W_end_rec) {
+                              t_next = W_end_rec;
+                            }
+
+                            const interval = t_next - t_curr;
+                            
+                            // Si hay una desconexión grande (>15s) entre lecturas, invalidamos la ventana
+                            if (interval > 15000) {
+                              gapsDetected = true;
+                              break;
+                            }
+
+                            if (sortedData[k].decibels <= UMBRAL_RUIDO) {
+                              lowDurationMs += interval;
+                            }
+                          }
+
+                          // Si la mayoría del tiempo de la ventana (>= 6 segundos) fue de bajo ruido, y no hubo cortes
+                          if (!gapsDetected && lowDurationMs >= 6000) {
+                            hasPrevLowNoise = true;
+                            break; // Ya encontramos una ventana de recuperación válida previa
+                          }
+                        }
+                      }
+                    }
+
+                    // Si se cumple la condición previa de bajo ruido, enviamos la alerta de precaución
+                    if (hasPrevLowNoise && state.ultimoInicioRuidoPersistente === null && state.ultimaAlertaChainStart !== W_start) {
+                      enviarAlertaTelegram(valorRuido);
+                      nextState.ultimaAlertaChainStart = W_start;
+
+                      // Anclar el inicio del ruido persistente
+                      nextState.ultimoInicioRuidoPersistente = W_start;
+                      nextState.ultimoMilestoneAlertaPersistente = 0;
+                      state.ultimoInicioRuidoPersistente = W_start;
+                      state.ultimoMilestoneAlertaPersistente = 0;
+                    }
+                  }
+
+                  // Resetear el marcador para que un futuro ruido vuelva a iniciar un periodo de evaluación
+                  nextState.inicioEvaluacionRuido = null;
+                  state.inicioEvaluacionRuido = null;
                 }
               }
 
