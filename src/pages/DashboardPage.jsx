@@ -244,8 +244,8 @@ export default function DashboardPage() {
                     const ratioDuration = totalDurationMs > 0 ? (lowDurationMs / totalDurationMs) : 0;
                     const ratioSamples = totalSamples > 0 ? (lowSamples / totalSamples) : 0;
 
-                    // Consolida recuperación si la mayoría de las lecturas en 30s son <= 80 dB (>50%)
-                    const seHaRecuperado = ratioDuration > 0.5 || ratioSamples > 0.5;
+                    // Consolida recuperación si el bajo ruido (<= 80 dB) se mantiene de forma sostenida al menos un 85% del periodo de 30s
+                    const seHaRecuperado = ratioDuration >= 0.85 || ratioSamples >= 0.85;
 
                     if (seHaRecuperado) {
                       enviarAlertaSilencioTelegram(valorRuido);
