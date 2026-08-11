@@ -132,36 +132,50 @@ export default function DashboardPage() {
 
             // 2. Verificar si el exceso de ruido lleva al menos 10 segundos continuos
             if (duracionExcesoMs >= 10000) {
-              // 3. Verificar que PREVIAMENTE hubo al menos 10 segundos de ruido bajo (<= 75 dB)
+              // 3. Verificar que PREVIAMENTE hubo un periodo de recuperación de bajo ruido (iniciado por una caída <75 dB con la mayoría del tiempo en ese estado)
               let hasPrevLowNoise = false;
               if (highChainStartIndex > 0) {
-                const prevLog = sortedData[highChainStartIndex - 1];
+                // Buscamos cualquier primera caída en el historial anterior al exceso
+                for (let d = 0; d < highChainStartIndex; d++) {
+                  const currentLog = sortedData[d];
+                  const esPrimeraCaida = currentLog.decibels <= UMBRAL_RUIDO && (d === 0 || sortedData[d - 1].decibels > UMBRAL_RUIDO);
 
-                // Comprobamos que el hueco temporal entre el último bajo ruido y el primer exceso sea <= 15s
-                if (oldestHighLog.rawTime - prevLog.rawTime <= 15000) {
-                  let lowChainStartIndex = highChainStartIndex - 1;
+                  if (esPrimeraCaida) {
+                    const W_start = currentLog.rawTime;
+                    const W_end = W_start + 10000; // ventana de 10 segundos
 
-                  for (let i = highChainStartIndex - 2; i >= 0; i--) {
-                    const current = sortedData[i];
-                    const next = sortedData[i + 1];
+                    let lowDurationMs = 0;
+                    let gapsDetected = false;
 
-                    // Si el nivel de ruido supera el umbral, se rompe la cadena de bajo ruido
-                    if (current.decibels > UMBRAL_RUIDO) {
-                      break;
+                    for (let k = d; k < sortedData.length; k++) {
+                      const t_curr = sortedData[k].rawTime;
+                      if (t_curr >= W_end) {
+                        break;
+                      }
+
+                      let t_next = (k < sortedData.length - 1) ? sortedData[k + 1].rawTime : W_end;
+                      if (t_next > W_end) {
+                        t_next = W_end;
+                      }
+
+                      const interval = t_next - t_curr;
+                      
+                      // Si hay una desconexión grande (>15s) entre lecturas, invalidamos la ventana
+                      if (interval > 15000) {
+                        gapsDetected = true;
+                        break;
+                      }
+
+                      if (sortedData[k].decibels <= UMBRAL_RUIDO) {
+                        lowDurationMs += interval;
+                      }
                     }
-                    // Si hay un hueco temporal de más de 15 segundos, se rompe la cadena
-                    if (next.rawTime - current.rawTime > 15000) {
-                      break;
+
+                    // Si la mayoría del tiempo de la ventana (>= 6 segundos) fue de bajo ruido, y no hubo cortes
+                    if (!gapsDetected && lowDurationMs >= 6000) {
+                      hasPrevLowNoise = true;
+                      break; // Ya encontramos una ventana de recuperación válida previa
                     }
-
-                    lowChainStartIndex = i;
-                  }
-
-                  const oldestLowLog = sortedData[lowChainStartIndex];
-                  const duracionBajoMs = prevLog.rawTime - oldestLowLog.rawTime;
-
-                  if (duracionBajoMs >= 10000) {
-                    hasPrevLowNoise = true;
                   }
                 }
               }
