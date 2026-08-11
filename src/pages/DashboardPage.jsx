@@ -16,10 +16,34 @@ import {
 const TELEGRAM_BOT_TOKEN = "8689475771:AAFWLVi4-Olq4kepi20E57WF-D1BHzQcjwQ";
 const TELEGRAM_CHAT_ID = "8761204101";
 const UMBRAL_RUIDO = 75;
-let ultimoLogIdProcesado = null;
-let ultimaAlertaChainStart = null;
-let ultimoMilestoneAlertaPersistente = 0;
-let ultimoInicioRuidoPersistente = null;
+
+// Helpers para persistir el estado de control de spam en localStorage
+const getPersistedState = () => {
+  return {
+    ultimoLogIdProcesado: localStorage.getItem('ultimoLogIdProcesado') || null,
+    ultimaAlertaChainStart: localStorage.getItem('ultimaAlertaChainStart') ? parseInt(localStorage.getItem('ultimaAlertaChainStart'), 10) : null,
+    ultimoInicioRuidoPersistente: localStorage.getItem('ultimoInicioRuidoPersistente') ? parseInt(localStorage.getItem('ultimoInicioRuidoPersistente'), 10) : null,
+    ultimoMilestoneAlertaPersistente: localStorage.getItem('ultimoMilestoneAlertaPersistente') ? parseInt(localStorage.getItem('ultimoMilestoneAlertaPersistente'), 10) : 0,
+  };
+};
+
+const setPersistedState = (state) => {
+  if (state.ultimoLogIdProcesado !== undefined) {
+    if (state.ultimoLogIdProcesado === null) localStorage.removeItem('ultimoLogIdProcesado');
+    else localStorage.setItem('ultimoLogIdProcesado', state.ultimoLogIdProcesado);
+  }
+  if (state.ultimaAlertaChainStart !== undefined) {
+    if (state.ultimaAlertaChainStart === null) localStorage.removeItem('ultimaAlertaChainStart');
+    else localStorage.setItem('ultimaAlertaChainStart', state.ultimaAlertaChainStart.toString());
+  }
+  if (state.ultimoInicioRuidoPersistente !== undefined) {
+    if (state.ultimoInicioRuidoPersistente === null) localStorage.removeItem('ultimoInicioRuidoPersistente');
+    else localStorage.setItem('ultimoInicioRuidoPersistente', state.ultimoInicioRuidoPersistente.toString());
+  }
+  if (state.ultimoMilestoneAlertaPersistente !== undefined) {
+    localStorage.setItem('ultimoMilestoneAlertaPersistente', state.ultimoMilestoneAlertaPersistente.toString());
+  }
+};
 
 /**
  * Función para enviar una alerta a Telegram cuando el ruido supera el umbral permitido.
@@ -77,11 +101,6 @@ export default function DashboardPage() {
 
   // Limpiar el canvas duplicado de index.html y destruir el gráfico al desmontar
   useEffect(() => {
-    ultimoLogIdProcesado = null;
-    ultimaAlertaChainStart = null;
-    ultimoMilestoneAlertaPersistente = 0;
-    ultimoInicioRuidoPersistente = null;
-
     const duplicateCanvas = document.querySelector('body > .seccion-monitoreo');
     if (duplicateCanvas) {
       duplicateCanvas.remove();
@@ -129,204 +148,215 @@ export default function DashboardPage() {
 
         // --- LÓGICA DE CONTROL DE FLUJO ANTI-SPAM DE TELEGRAM ---
         const latestLog = sortedData[sortedData.length - 1];
-        if (latestLog && latestLog.id !== ultimoLogIdProcesado) {
-          ultimoLogIdProcesado = latestLog.id;
+        if (latestLog) {
+          const state = getPersistedState();
 
-          const valorRuido = latestLog.decibels;
-          const esFresco = Date.now() - latestLog.rawTime < 30000; // Solo procesar si el log es de los últimos 30 segundos (evita alertas al iniciar)
+          if (latestLog.id !== state.ultimoLogIdProcesado) {
+            let nextState = { ultimoLogIdProcesado: latestLog.id };
 
-          // 0. Verificar si nos hemos recuperado (entrado a Fase de Silencio/Bajo Ruido) desde que empezó el ruido persistente
-          if (ultimoInicioRuidoPersistente !== null) {
-            let seHaRecuperado = false;
-            for (let d = 0; d < sortedData.length; d++) {
-              const currentLog = sortedData[d];
-              if (currentLog.rawTime < ultimoInicioRuidoPersistente) {
-                continue; // La recuperación debe ser posterior al inicio del ruido persistente
-              }
+            const valorRuido = latestLog.decibels;
+            const esFresco = Date.now() - latestLog.rawTime < 30000; // Solo procesar si el log es de los últimos 30 segundos (evita alertas al iniciar)
 
-              const esPrimeraCaida = currentLog.decibels <= UMBRAL_RUIDO && (d === 0 || sortedData[d - 1].decibels > UMBRAL_RUIDO);
-              if (esPrimeraCaida) {
-                const W_start = currentLog.rawTime;
-                const W_end = W_start + 10000;
-
-                let lowDurationMs = 0;
-                let gapsDetected = false;
-
-                for (let k = d; k < sortedData.length; k++) {
-                  const t_curr = sortedData[k].rawTime;
-                  if (t_curr >= W_end) {
-                    break;
-                  }
-
-                  let t_next = (k < sortedData.length - 1) ? sortedData[k + 1].rawTime : W_end;
-                  if (t_next > W_end) {
-                    t_next = W_end;
-                  }
-
-                  const interval = t_next - t_curr;
-                  if (interval > 15000) {
-                    gapsDetected = true;
-                    break;
-                  }
-
-                  if (sortedData[k].decibels <= UMBRAL_RUIDO) {
-                    lowDurationMs += interval;
-                  }
+            // 0. Verificar si nos hemos recuperado (entrado a Fase de Silencio/Bajo Ruido) desde que empezó el ruido persistente
+            if (state.ultimoInicioRuidoPersistente !== null) {
+              let seHaRecuperado = false;
+              for (let d = 0; d < sortedData.length; d++) {
+                const currentLog = sortedData[d];
+                if (currentLog.rawTime < state.ultimoInicioRuidoPersistente) {
+                  continue; // La recuperación debe ser posterior al inicio del ruido persistente
                 }
 
-                if (!gapsDetected && lowDurationMs >= 6000) {
-                  seHaRecuperado = true;
-                  break;
-                }
-              }
-            }
+                const esPrimeraCaida = currentLog.decibels <= UMBRAL_RUIDO && (d === 0 || sortedData[d - 1].decibels > UMBRAL_RUIDO);
+                if (esPrimeraCaida) {
+                  const W_start = currentLog.rawTime;
+                  const W_end = W_start + 10000;
 
-            if (seHaRecuperado) {
-              ultimoInicioRuidoPersistente = null;
-              ultimoMilestoneAlertaPersistente = 0;
-            }
-          }
+                  let lowDurationMs = 0;
+                  let gapsDetected = false;
 
-          if (esFresco && valorRuido > UMBRAL_RUIDO) {
-            // 1. Encontrar el inicio de la cadena contigua de exceso de ruido (>75 dB)
-            let highChainStartIndex = sortedData.length - 1;
-            for (let i = sortedData.length - 2; i >= 0; i--) {
-              const current = sortedData[i];
-              const next = sortedData[i + 1];
-
-              // Si la lectura no supera el umbral, se rompe la cadena
-              if (current.decibels <= UMBRAL_RUIDO) {
-                break;
-              }
-              // Si hay un hueco temporal de más de 15 segundos entre lecturas, se rompe la cadena
-              if (next.rawTime - current.rawTime > 15000) {
-                break;
-              }
-
-              highChainStartIndex = i;
-            }
-
-            const oldestHighLog = sortedData[highChainStartIndex];
-            const duracionExcesoMs = latestLog.rawTime - oldestHighLog.rawTime;
-
-            // 2. Verificar si el exceso de ruido lleva al menos 10 segundos continuos
-            if (duracionExcesoMs >= 10000) {
-              // 3. Verificar que PREVIAMENTE hubo un periodo de recuperación de bajo ruido (iniciado por una caída <75 dB con la mayoría del tiempo en ese estado)
-              let hasPrevLowNoise = false;
-              if (highChainStartIndex > 0) {
-                // Buscamos cualquier primera caída en el historial anterior al exceso
-                for (let d = 0; d < highChainStartIndex; d++) {
-                  const currentLog = sortedData[d];
-                  const esPrimeraCaida = currentLog.decibels <= UMBRAL_RUIDO && (d === 0 || sortedData[d - 1].decibels > UMBRAL_RUIDO);
-
-                  if (esPrimeraCaida) {
-                    const W_start = currentLog.rawTime;
-                    const W_end = W_start + 10000; // ventana de 10 segundos
-
-                    let lowDurationMs = 0;
-                    let gapsDetected = false;
-
-                    for (let k = d; k < sortedData.length; k++) {
-                      const t_curr = sortedData[k].rawTime;
-                      if (t_curr >= W_end) {
-                        break;
-                      }
-
-                      let t_next = (k < sortedData.length - 1) ? sortedData[k + 1].rawTime : W_end;
-                      if (t_next > W_end) {
-                        t_next = W_end;
-                      }
-
-                      const interval = t_next - t_curr;
-                      
-                      // Si hay una desconexión grande (>15s) entre lecturas, invalidamos la ventana
-                      if (interval > 15000) {
-                        gapsDetected = true;
-                        break;
-                      }
-
-                      if (sortedData[k].decibels <= UMBRAL_RUIDO) {
-                        lowDurationMs += interval;
-                      }
-                    }
-
-                    // Si la mayoría del tiempo de la ventana (>= 6 segundos) fue de bajo ruido, y no hubo cortes
-                    if (!gapsDetected && lowDurationMs >= 6000) {
-                      hasPrevLowNoise = true;
-                      break; // Ya encontramos una ventana de recuperación válida previa
-                    }
-                  }
-                }
-              }
-
-              // 4. Si se cumple la condición previa de bajo ruido y no hemos enviado alerta para esta cadena
-              if (hasPrevLowNoise && ultimaAlertaChainStart !== oldestHighLog.rawTime) {
-                enviarAlertaTelegram(valorRuido);
-                ultimaAlertaChainStart = oldestHighLog.rawTime;
-
-                // Anclar el inicio del ruido persistente si no estaba iniciado
-                if (ultimoInicioRuidoPersistente === null) {
-                  ultimoInicioRuidoPersistente = oldestHighLog.rawTime;
-                  ultimoMilestoneAlertaPersistente = 0;
-                }
-              }
-            }
-
-            // 5. Lógica de escala / alerta persistente (si lleva >= 120s en exceso de ruido sin silenciarse)
-            if (ultimoInicioRuidoPersistente !== null) {
-              const totalPeriodMs = latestLog.rawTime - ultimoInicioRuidoPersistente;
-              const elapsedSeconds = Math.round(totalPeriodMs / 1000);
-
-              if (elapsedSeconds >= 120) {
-                // Calcular qué porcentaje del tiempo ha estado por encima de 75dB durante este período (rango visible)
-                const T_start_calculo = Math.max(ultimoInicioRuidoPersistente, sortedData[0].rawTime);
-                let highDurationMs = 0;
-                let periodCalculadoMs = latestLog.rawTime - T_start_calculo;
-
-                if (periodCalculadoMs > 0) {
-                  for (let k = 0; k < sortedData.length; k++) {
+                  for (let k = d; k < sortedData.length; k++) {
                     const t_curr = sortedData[k].rawTime;
-                    if (t_curr < T_start_calculo || t_curr >= latestLog.rawTime) {
-                      continue;
+                    if (t_curr >= W_end) {
+                      break;
                     }
 
-                    let t_next = (k < sortedData.length - 1) ? sortedData[k + 1].rawTime : latestLog.rawTime;
-                    if (t_next > latestLog.rawTime) {
-                      t_next = latestLog.rawTime;
+                    let t_next = (k < sortedData.length - 1) ? sortedData[k + 1].rawTime : W_end;
+                    if (t_next > W_end) {
+                      t_next = W_end;
                     }
 
                     const interval = t_next - t_curr;
-                    if (sortedData[k].decibels > UMBRAL_RUIDO) {
-                      highDurationMs += interval;
+                    if (interval > 15000) {
+                      gapsDetected = true;
+                      break;
+                    }
+
+                    if (sortedData[k].decibels <= UMBRAL_RUIDO) {
+                      lowDurationMs += interval;
+                    }
+                  }
+
+                  if (!gapsDetected && lowDurationMs >= 6000) {
+                    seHaRecuperado = true;
+                    break;
+                  }
+                }
+              }
+
+              if (seHaRecuperado) {
+                nextState.ultimoInicioRuidoPersistente = null;
+                nextState.ultimoMilestoneAlertaPersistente = 0;
+                state.ultimoInicioRuidoPersistente = null;
+                state.ultimoMilestoneAlertaPersistente = 0;
+              }
+            }
+
+            if (esFresco && valorRuido > UMBRAL_RUIDO) {
+              // 1. Encontrar el inicio de la cadena contigua de exceso de ruido (>75 dB)
+              let highChainStartIndex = sortedData.length - 1;
+              for (let i = sortedData.length - 2; i >= 0; i--) {
+                const current = sortedData[i];
+                const next = sortedData[i + 1];
+
+                // Si la lectura no supera el umbral, se rompe la cadena
+                if (current.decibels <= UMBRAL_RUIDO) {
+                  break;
+                }
+                // Si hay un hueco temporal de más de 15 segundos entre lecturas, se rompe la cadena
+                if (next.rawTime - current.rawTime > 15000) {
+                  break;
+                }
+
+                highChainStartIndex = i;
+              }
+
+              const oldestHighLog = sortedData[highChainStartIndex];
+              const duracionExcesoMs = latestLog.rawTime - oldestHighLog.rawTime;
+
+              // 2. Verificar si el exceso de ruido lleva al menos 10 segundos continuos
+              if (duracionExcesoMs >= 10000) {
+                // 3. Verificar que PREVIAMENTE hubo un periodo de recuperación de bajo ruido (iniciado por una caída <75 dB con la mayoría del tiempo en ese estado)
+                let hasPrevLowNoise = false;
+                if (highChainStartIndex > 0) {
+                  // Buscamos cualquier primera caída en el historial anterior al exceso
+                  for (let d = 0; d < highChainStartIndex; d++) {
+                    const currentLog = sortedData[d];
+                    const esPrimeraCaida = currentLog.decibels <= UMBRAL_RUIDO && (d === 0 || sortedData[d - 1].decibels > UMBRAL_RUIDO);
+
+                    if (esPrimeraCaida) {
+                      const W_start = currentLog.rawTime;
+                      const W_end = W_start + 10000; // ventana de 10 segundos
+
+                      let lowDurationMs = 0;
+                      let gapsDetected = false;
+
+                      for (let k = d; k < sortedData.length; k++) {
+                        const t_curr = sortedData[k].rawTime;
+                        if (t_curr >= W_end) {
+                          break;
+                        }
+
+                        let t_next = (k < sortedData.length - 1) ? sortedData[k + 1].rawTime : W_end;
+                        if (t_next > W_end) {
+                          t_next = W_end;
+                        }
+
+                        const interval = t_next - t_curr;
+                        
+                        // Si hay una desconexión grande (>15s) entre lecturas, invalidamos la ventana
+                        if (interval > 15000) {
+                          gapsDetected = true;
+                          break;
+                        }
+
+                        if (sortedData[k].decibels <= UMBRAL_RUIDO) {
+                          lowDurationMs += interval;
+                        }
+                      }
+
+                      // Si la mayoría del tiempo de la ventana (>= 6 segundos) fue de bajo ruido, y no hubo cortes
+                      if (!gapsDetected && lowDurationMs >= 6000) {
+                        hasPrevLowNoise = true;
+                        break; // Ya encontramos una ventana de recuperación válida previa
+                      }
                     }
                   }
                 }
 
-                const ratioExceso = periodCalculadoMs > 0 ? (highDurationMs / periodCalculadoMs) : 0;
+                // 4. Si se cumple la condición previa de bajo ruido y no hemos enviado alerta para esta cadena
+                if (hasPrevLowNoise && state.ultimaAlertaChainStart !== oldestHighLog.rawTime) {
+                  enviarAlertaTelegram(valorRuido);
+                  nextState.ultimaAlertaChainStart = oldestHighLog.rawTime;
 
-                // Si el nivel de ruido ha estado mayormente (>50%) por encima de 75dB en la parte visible
-                if (ratioExceso >= 0.5) {
-                  const currentMilestone = Math.floor(elapsedSeconds / 120) * 120;
+                  // Anclar el inicio del ruido persistente si no estaba iniciado
+                  if (state.ultimoInicioRuidoPersistente === null) {
+                    nextState.ultimoInicioRuidoPersistente = oldestHighLog.rawTime;
+                    nextState.ultimoMilestoneAlertaPersistente = 0;
+                    state.ultimoInicioRuidoPersistente = oldestHighLog.rawTime;
+                    state.ultimoMilestoneAlertaPersistente = 0;
+                  }
+                }
+              }
 
-                  if (currentMilestone > ultimoMilestoneAlertaPersistente) {
-                    const minutos = Math.floor(elapsedSeconds / 60);
-                    const segundos = elapsedSeconds % 60;
-                    let tiempoFormateado = "";
-                    if (minutos > 0) {
-                      tiempoFormateado += `${minutos} minuto${minutos !== 1 ? 's' : ''}`;
-                      if (segundos > 0) {
-                        tiempoFormateado += ` y ${segundos} segundo${segundos !== 1 ? 's' : ''}`;
+              // 5. Lógica de escala / alerta persistente (si lleva >= 120s en exceso de ruido sin silenciarse)
+              if (state.ultimoInicioRuidoPersistente !== null) {
+                const totalPeriodMs = latestLog.rawTime - state.ultimoInicioRuidoPersistente;
+                const elapsedSeconds = Math.round(totalPeriodMs / 1000);
+
+                if (elapsedSeconds >= 120) {
+                  // Calcular qué porcentaje del tiempo ha estado por encima de 75dB durante este período (rango visible)
+                  const T_start_calculo = Math.max(state.ultimoInicioRuidoPersistente, sortedData[0].rawTime);
+                  let highDurationMs = 0;
+                  let periodCalculadoMs = latestLog.rawTime - T_start_calculo;
+
+                  if (periodCalculadoMs > 0) {
+                    for (let k = 0; k < sortedData.length; k++) {
+                      const t_curr = sortedData[k].rawTime;
+                      if (t_curr < T_start_calculo || t_curr >= latestLog.rawTime) {
+                        continue;
                       }
-                    } else {
-                      tiempoFormateado += `${segundos} segundo${segundos !== 1 ? 's' : ''}`;
-                    }
 
-                    enviarAlertaPersistenteTelegram(valorRuido, tiempoFormateado);
-                    ultimoMilestoneAlertaPersistente = currentMilestone;
+                      let t_next = (k < sortedData.length - 1) ? sortedData[k + 1].rawTime : latestLog.rawTime;
+                      if (t_next > latestLog.rawTime) {
+                        t_next = latestLog.rawTime;
+                      }
+
+                      const interval = t_next - t_curr;
+                      if (sortedData[k].decibels > UMBRAL_RUIDO) {
+                        highDurationMs += interval;
+                      }
+                    }
+                  }
+
+                  const ratioExceso = periodCalculadoMs > 0 ? (highDurationMs / periodCalculadoMs) : 0;
+
+                  // Si el nivel de ruido ha estado mayormente (>50%) por encima de 75dB en la parte visible
+                  if (ratioExceso >= 0.5) {
+                    const currentMilestone = Math.floor(elapsedSeconds / 120) * 120;
+
+                    if (currentMilestone > state.ultimoMilestoneAlertaPersistente) {
+                      const minutos = Math.floor(elapsedSeconds / 60);
+                      const segundos = elapsedSeconds % 60;
+                      let tiempoFormateado = "";
+                      if (minutos > 0) {
+                        tiempoFormateado += `${minutos} minuto${minutos !== 1 ? 's' : ''}`;
+                        if (segundos > 0) {
+                          tiempoFormateado += ` y ${segundos} segundo${segundos !== 1 ? 's' : ''}`;
+                        }
+                      } else {
+                        tiempoFormateado += `${segundos} segundo${segundos !== 1 ? 's' : ''}`;
+                      }
+
+                      enviarAlertaPersistenteTelegram(valorRuido, tiempoFormateado);
+                      nextState.ultimoMilestoneAlertaPersistente = currentMilestone;
+                    }
                   }
                 }
               }
             }
+
+            // Guardar el estado actualizado en localStorage
+            setPersistedState(nextState);
           }
         }
 
