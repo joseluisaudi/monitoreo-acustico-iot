@@ -320,11 +320,11 @@ export default function DashboardPage() {
                   const ratioDuration = totalDurationMs > 0 ? (highDurationMs / totalDurationMs) : 0;
                   const ratioSamples = totalSamples > 0 ? (highSamples / totalSamples) : 0;
 
-                  // Mayormente significa > 50%
-                  const esMayormenteExceso = ratioDuration > 0.5 || ratioSamples > 0.5;
+                  // Exceso sostenido significa estar en ruido alto (> 80 dB) al menos un 85% del periodo de 30s
+                  const esMayormenteExceso = ratioDuration >= 0.85 || ratioSamples >= 0.85;
 
                   if (esMayormenteExceso) {
-                    // Si se cumple la condición de exceso de ruido, no estamos en un ciclo de ruido persistente ya notificado
+                    // Si se cumple la condición de exceso de ruido sostenido (>= 85%), no estamos en un ciclo de ruido persistente ya notificado
                     // y no hemos enviado una alerta para esta ventana
                     if (state.ultimoInicioRuidoPersistente === null && state.ultimaAlertaChainStart !== W_start) {
                       enviarAlertaTelegram(valorRuido);
@@ -376,8 +376,8 @@ export default function DashboardPage() {
 
                   const ratioExceso = periodCalculadoMs > 0 ? (highDurationMs / periodCalculadoMs) : 0;
 
-                  // Si el nivel de ruido ha estado mayormente (>50%) por encima de 80dB en la parte visible
-                  if (ratioExceso >= 0.5) {
+                  // Si el nivel de ruido ha estado sostenidamente (>=85%) por encima de 80dB en la parte visible
+                  if (ratioExceso >= 0.85) {
                     const currentMilestone = Math.floor(elapsedSeconds / 120) * 120;
 
                     if (currentMilestone > state.ultimoMilestoneAlertaPersistente) {
