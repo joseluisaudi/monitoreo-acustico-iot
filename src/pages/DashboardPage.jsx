@@ -13,7 +13,7 @@ import {
 // ==================== CONFIGURACIÓN DE ALERTAS DE TELEGRAM ====================
 const TELEGRAM_BOT_TOKEN = "8689475771:AAFWLVi4-Olq4kepi20E57WF-D1BHzQcjwQ";
 const TELEGRAM_CHAT_ID = "8761204101";
-const UMBRAL_RUIDO = 75;
+const UMBRAL_RUIDO = 80;
 
 // Helpers para persistir el estado de control de spam en localStorage
 const getPersistedState = () => {
@@ -194,7 +194,7 @@ export default function DashboardPage() {
 
               // 0. Verificar si nos hemos recuperado (entrado a Fase de Silencio/Bajo Ruido) desde que empezó el ruido persistente
               if (state.ultimoInicioRuidoPersistente !== null) {
-                // A. Iniciar el periodo de evaluación de silencio si detectamos la primera lectura <= 75 dB
+                // A. Iniciar el periodo de evaluación de silencio si detectamos la primera lectura <= 80 dB
                 if (valorRuido <= UMBRAL_RUIDO && state.inicioEvaluacionSilencio === null) {
                   nextState.inicioEvaluacionSilencio = latestLog.rawTime;
                   state.inicioEvaluacionSilencio = latestLog.rawTime; // Actualizar localmente para la evaluación en este mismo ciclo
@@ -244,7 +244,7 @@ export default function DashboardPage() {
                     const ratioDuration = totalDurationMs > 0 ? (lowDurationMs / totalDurationMs) : 0;
                     const ratioSamples = totalSamples > 0 ? (lowSamples / totalSamples) : 0;
 
-                    // Consolida recuperación si la mayoría de las lecturas en 30s son <= 75 dB (>50%)
+                    // Consolida recuperación si la mayoría de las lecturas en 30s son <= 80 dB (>50%)
                     const seHaRecuperado = ratioDuration > 0.5 || ratioSamples > 0.5;
 
                     if (seHaRecuperado) {
@@ -268,7 +268,7 @@ export default function DashboardPage() {
                 }
               }
 
-              // A. Iniciar el periodo de evaluación si detectamos el primer ruido > 75 dB
+              // A. Iniciar el periodo de evaluación si detectamos el primer ruido > 80 dB
               // y no estamos en un ciclo de ruido persistente ya activo o con ventana ya iniciada.
               if (valorRuido > UMBRAL_RUIDO && state.ultimoInicioRuidoPersistente === null && state.inicioEvaluacionRuido === null) {
                 nextState.inicioEvaluacionRuido = latestLog.rawTime;
@@ -279,7 +279,7 @@ export default function DashboardPage() {
               if (state.inicioEvaluacionRuido !== null) {
                 const elapsedMs = latestLog.rawTime - state.inicioEvaluacionRuido;
 
-                // Solo evaluar si ya transcurrieron al menos 30 segundos desde la primera lectura > 75 dB
+                // Solo evaluar si ya transcurrieron al menos 30 segundos desde la primera lectura > 80 dB
                 // Usamos 28 segundos para ser tolerantes a pequeñas fluctuaciones/latencia del intervalo del sensor.
                 if (elapsedMs >= 28000) {
                   const W_start = state.inicioEvaluacionRuido;
@@ -350,7 +350,7 @@ export default function DashboardPage() {
                 const elapsedSeconds = Math.round(totalPeriodMs / 1000);
 
                 if (elapsedSeconds >= 120) {
-                  // Calcular qué porcentaje del tiempo ha estado por encima de 75dB durante este período (rango visible)
+                  // Calcular qué porcentaje del tiempo ha estado por encima de 80dB durante este período (rango visible)
                   const T_start_calculo = Math.max(state.ultimoInicioRuidoPersistente, sortedData[0].rawTime);
                   let highDurationMs = 0;
                   let periodCalculadoMs = latestLog.rawTime - T_start_calculo;
@@ -376,7 +376,7 @@ export default function DashboardPage() {
 
                   const ratioExceso = periodCalculadoMs > 0 ? (highDurationMs / periodCalculadoMs) : 0;
 
-                  // Si el nivel de ruido ha estado mayormente (>50%) por encima de 75dB en la parte visible
+                  // Si el nivel de ruido ha estado mayormente (>50%) por encima de 80dB en la parte visible
                   if (ratioExceso >= 0.5) {
                     const currentMilestone = Math.floor(elapsedSeconds / 120) * 120;
 
@@ -535,7 +535,7 @@ export default function DashboardPage() {
     simulatedVals.forEach((val, index) => {
       const timeOffset = baseTime + index * 60000;
       let status = 'normal';
-      if (val > 75) status = 'danger';
+      if (val > UMBRAL_RUIDO) status = 'danger';
       else if (val > 55) status = 'warning';
 
       mockData.push({
@@ -641,7 +641,7 @@ export default function DashboardPage() {
     
     // Determinar estado de salud según la lectura actual
     let status = 'normal';
-    if (current > 75) status = 'danger';
+    if (current > UMBRAL_RUIDO) status = 'danger';
     else if (current > 55) status = 'warning';
 
     return { current, average, max, status };
@@ -710,7 +710,7 @@ export default function DashboardPage() {
             <span>Nivel Máximo Registrado</span>
             <Activity size={18} color="var(--status-danger)" />
           </div>
-          <div className="metric-value" style={{ color: max > 75 ? 'var(--status-danger)' : 'var(--text-main)' }}>
+          <div className="metric-value" style={{ color: max > UMBRAL_RUIDO ? 'var(--status-danger)' : 'var(--text-main)' }}>
             {max === -Infinity ? 0 : max} <span className="metric-unit">dB</span>
           </div>
           <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
@@ -771,11 +771,11 @@ export default function DashboardPage() {
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <AlertTriangle size={14} color="var(--status-warning)" />
-              <span>55 - 75 dB: Exposición prolongada molesta</span>
+              <span>55 - 80 dB: Exposición prolongada molesta</span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <AlertTriangle size={14} color="var(--status-danger)" />
-              <span>&gt; 75 dB: Daño auditivo latente</span>
+              <span>&gt; 80 dB: Daño auditivo latente</span>
             </div>
           </div>
         </div>

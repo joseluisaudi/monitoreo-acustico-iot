@@ -46,7 +46,7 @@ exports.postSoundData = onRequest({ cors: true }, async (req, res) => {
 
     // 2. Clasificación del nivel de riesgo auditivo
     let status = "normal";
-    if (decibels > 75) {
+    if (decibels > 80) {
       status = "danger"; // Ruido potencialmente dañino
     } else if (decibels > 55) {
       status = "warning"; // Ruido moderado/alto

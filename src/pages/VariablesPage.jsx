@@ -72,7 +72,7 @@ export default function VariablesPage() {
   };
 
   const getStatus = (db) => {
-    if (db > 75) return 'danger';
+    if (db > 80) return 'danger';
     if (db > 55) return 'warning';
     return 'normal';
   };
