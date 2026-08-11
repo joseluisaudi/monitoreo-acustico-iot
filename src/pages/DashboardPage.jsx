@@ -413,26 +413,38 @@ export default function DashboardPage() {
         if (ctx) {
           if (!chartInstanceRef.current) {
             // Inicializar una gráfica de líneas de Chart.js referenciando el canvas 'miGrafico'
-            // Define la estructura base con un dataset para el nivel de ruido/sonido (eje Y) y etiquetas de tiempo (eje X)
             const initialLogs = sortedData.slice(-10);
             chartInstanceRef.current = new window.Chart(ctx, {
               type: 'line',
               data: {
                 labels: initialLogs.map(log => log.time),
-                datasets: [{
-                  label: 'Nivel de Ruido (dB)',
-                  data: initialLogs.map(log => log.decibels),
-                  borderColor: '#06b6d4', // var(--secondary)
-                  backgroundColor: 'rgba(6, 182, 212, 0.1)',
-                  borderWidth: 2,
-                  tension: 0.3,
-                  fill: true,
-                  pointBackgroundColor: '#06b6d4',
-                  pointBorderColor: '#080C14',
-                  pointBorderWidth: 1.5,
-                  pointRadius: 4,
-                  pointHoverRadius: 6
-                }]
+                datasets: [
+                  {
+                    label: 'Nivel de Ruido (dB)',
+                    data: initialLogs.map(log => log.decibels),
+                    borderColor: '#06b6d4',
+                    backgroundColor: 'rgba(6, 182, 212, 0.12)',
+                    borderWidth: 3,
+                    tension: 0.35,
+                    fill: true,
+                    pointBackgroundColor: '#00f2fe',
+                    pointBorderColor: '#080C14',
+                    pointBorderWidth: 2,
+                    pointRadius: 5,
+                    pointHoverRadius: 8
+                  },
+                  {
+                    label: `Umbral de Alerta (${UMBRAL_RUIDO} dB)`,
+                    data: initialLogs.map(() => UMBRAL_RUIDO),
+                    borderColor: '#ef4444',
+                    backgroundColor: 'transparent',
+                    borderWidth: 2,
+                    borderDash: [6, 6],
+                    fill: false,
+                    pointRadius: 0,
+                    pointHoverRadius: 0
+                  }
+                ]
               },
               options: {
                 responsive: true,
@@ -450,7 +462,18 @@ export default function DashboardPage() {
                   }
                 },
                 plugins: {
-                  legend: { display: false }
+                  legend: {
+                    display: true,
+                    position: 'top',
+                    align: 'end',
+                    labels: {
+                      color: '#9CA3AF',
+                      font: { family: 'Inter', size: 12, weight: '500' },
+                      usePointStyle: true,
+                      boxWidth: 8,
+                      padding: 16
+                    }
+                  }
                 }
               }
             });
@@ -463,17 +486,25 @@ export default function DashboardPage() {
             const latestLog = sortedData[sortedData.length - 1];
             if (latestLog) {
               const currentDataset = chartInstanceRef.current.data.datasets[0];
+              const thresholdDataset = chartInstanceRef.current.data.datasets[1];
+
               if (currentDataset._lastLoggedId !== latestLog.id) {
-                // Actualiza el gráfico agregando la lectura de ruido y el tiempo actual (toLocaleTimeString)
+                // Actualiza el gráfico agregando la lectura de ruido y la hora actual
                 const currentLabel = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
                 chartInstanceRef.current.data.labels.push(currentLabel);
                 currentDataset.data.push(latestLog.decibels);
+                if (thresholdDataset) {
+                  thresholdDataset.data.push(UMBRAL_RUIDO);
+                }
                 currentDataset._lastLoggedId = latestLog.id;
 
                 // Mantiene un máximo de 10 puntos visibles en la gráfica (usa .shift() cuando se supere ese límite)
                 if (chartInstanceRef.current.data.labels.length > 10) {
                   chartInstanceRef.current.data.labels.shift();
                   currentDataset.data.shift();
+                  if (thresholdDataset) {
+                    thresholdDataset.data.shift();
+                  }
                 }
 
                 // Ejecuta miGrafico.update() en cada nueva lectura
@@ -533,19 +564,33 @@ export default function DashboardPage() {
           type: 'line',
           data: {
             labels: mockData.map(log => log.time),
-            datasets: [{
-              label: 'Nivel de Ruido (dB)',
-              data: mockData.map(log => log.decibels),
-              borderColor: '#06b6d4',
-              backgroundColor: 'rgba(6, 182, 212, 0.1)',
-              borderWidth: 2,
-              tension: 0.3,
-              fill: true,
-              pointBackgroundColor: '#06b6d4',
-              pointBorderColor: '#080C14',
-              pointBorderWidth: 1.5,
-              pointRadius: 4
-            }]
+            datasets: [
+              {
+                label: 'Nivel de Ruido (dB)',
+                data: mockData.map(log => log.decibels),
+                borderColor: '#06b6d4',
+                backgroundColor: 'rgba(6, 182, 212, 0.12)',
+                borderWidth: 3,
+                tension: 0.35,
+                fill: true,
+                pointBackgroundColor: '#00f2fe',
+                pointBorderColor: '#080C14',
+                pointBorderWidth: 2,
+                pointRadius: 5,
+                pointHoverRadius: 8
+              },
+              {
+                label: `Umbral de Alerta (${UMBRAL_RUIDO} dB)`,
+                data: mockData.map(() => UMBRAL_RUIDO),
+                borderColor: '#ef4444',
+                backgroundColor: 'transparent',
+                borderWidth: 2,
+                borderDash: [6, 6],
+                fill: false,
+                pointRadius: 0,
+                pointHoverRadius: 0
+              }
+            ]
           },
           options: {
             responsive: true,
@@ -563,7 +608,18 @@ export default function DashboardPage() {
               }
             },
             plugins: {
-              legend: { display: false }
+              legend: {
+                display: true,
+                position: 'top',
+                align: 'end',
+                labels: {
+                  color: '#9CA3AF',
+                  font: { family: 'Inter', size: 12, weight: '500' },
+                  usePointStyle: true,
+                  boxWidth: 8,
+                  padding: 16
+                }
+              }
             }
           }
         });
@@ -670,7 +726,7 @@ export default function DashboardPage() {
         {/* Gráfico de Línea Temporal */}
         <div className="chart-card glass-card">
           <h3 className="chart-title">Comportamiento del Nivel de Sonido (dB)</h3>
-          <div style={{ width: '100%', height: '100%', minHeight: '300px', position: 'relative' }}>
+          <div style={{ width: '100%', height: '100%', minHeight: '380px', position: 'relative' }}>
             {loading && (
               <div style={{ 
                 position: 'absolute', 
@@ -688,8 +744,8 @@ export default function DashboardPage() {
                 Cargando gráfico...
               </div>
             )}
-            <div style={{ width: '100%', height: '280px', position: 'relative' }}>
-              <canvas id="miGrafico" width="400" height="200"></canvas>
+            <div style={{ width: '100%', height: '370px', position: 'relative' }}>
+              <canvas id="miGrafico"></canvas>
             </div>
           </div>
         </div>
