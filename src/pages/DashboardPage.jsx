@@ -267,59 +267,9 @@ export default function DashboardPage() {
                   const esMayormenteExceso = ratioDuration > 0.5 || ratioSamples > 0.5;
 
                   if (esMayormenteExceso) {
-                    // Encontrar el log correspondiente al inicio de la ventana
-                    const firstHighLogIndex = sortedData.findIndex(log => log.rawTime >= W_start);
-
-                    // 2. Verificar que PREVIAMENTE hubo un periodo de recuperación de bajo ruido
-                    let hasPrevLowNoise = false;
-                    if (firstHighLogIndex > 0) {
-                      // Buscamos cualquier primera caída en el historial anterior al exceso
-                      for (let d = 0; d < firstHighLogIndex; d++) {
-                        const currentLog = sortedData[d];
-                        const esPrimeraCaida = currentLog.decibels <= UMBRAL_RUIDO && (d === 0 || sortedData[d - 1].decibels > UMBRAL_RUIDO);
-
-                        if (esPrimeraCaida) {
-                          const W_start_rec = currentLog.rawTime;
-                          const W_end_rec = W_start_rec + 10000; // ventana de 10 segundos
-
-                          let lowDurationMs = 0;
-                          let gapsDetected = false;
-
-                          for (let k = d; k < sortedData.length; k++) {
-                            const t_curr = sortedData[k].rawTime;
-                            if (t_curr >= W_end_rec) {
-                              break;
-                            }
-
-                            let t_next = (k < sortedData.length - 1) ? sortedData[k + 1].rawTime : W_end_rec;
-                            if (t_next > W_end_rec) {
-                              t_next = W_end_rec;
-                            }
-
-                            const interval = t_next - t_curr;
-                            
-                            // Si hay una desconexión grande (>15s) entre lecturas, invalidamos la ventana
-                            if (interval > 15000) {
-                              gapsDetected = true;
-                              break;
-                            }
-
-                            if (sortedData[k].decibels <= UMBRAL_RUIDO) {
-                              lowDurationMs += interval;
-                            }
-                          }
-
-                          // Si la mayoría del tiempo de la ventana (>= 6 segundos) fue de bajo ruido, y no hubo cortes
-                          if (!gapsDetected && lowDurationMs >= 6000) {
-                            hasPrevLowNoise = true;
-                            break; // Ya encontramos una ventana de recuperación válida previa
-                          }
-                        }
-                      }
-                    }
-
-                    // Si se cumple la condición previa de bajo ruido, enviamos la alerta de precaución
-                    if (hasPrevLowNoise && state.ultimoInicioRuidoPersistente === null && state.ultimaAlertaChainStart !== W_start) {
+                    // Si se cumple la condición de exceso de ruido, no estamos en un ciclo de ruido persistente ya notificado
+                    // y no hemos enviado una alerta para esta ventana
+                    if (state.ultimoInicioRuidoPersistente === null && state.ultimaAlertaChainStart !== W_start) {
                       enviarAlertaTelegram(valorRuido);
                       nextState.ultimaAlertaChainStart = W_start;
 
