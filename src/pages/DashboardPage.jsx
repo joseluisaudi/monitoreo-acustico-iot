@@ -109,8 +109,8 @@ export default function DashboardPage() {
           const esFresco = Date.now() - latestLog.rawTime < 30000; // Solo procesar si el log es de los últimos 30 segundos (evita alertas al iniciar)
 
           if (esFresco && valorRuido > UMBRAL_RUIDO) {
-            // Encontrar el inicio de la cadena contigua de exceso de ruido
-            let oldestChainLog = latestLog;
+            // 1. Encontrar el inicio de la cadena contigua de exceso de ruido (>75 dB)
+            let highChainStartIndex = sortedData.length - 1;
             for (let i = sortedData.length - 2; i >= 0; i--) {
               const current = sortedData[i];
               const next = sortedData[i + 1];
@@ -124,16 +124,52 @@ export default function DashboardPage() {
                 break;
               }
 
-              oldestChainLog = current;
+              highChainStartIndex = i;
             }
 
-            const duracionExcesoMs = latestLog.rawTime - oldestChainLog.rawTime;
+            const oldestHighLog = sortedData[highChainStartIndex];
+            const duracionExcesoMs = latestLog.rawTime - oldestHighLog.rawTime;
 
-            // Si el exceso de ruido lleva al menos 10 segundos continuos
+            // 2. Verificar si el exceso de ruido lleva al menos 10 segundos continuos
             if (duracionExcesoMs >= 10000) {
-              if (ultimaAlertaChainStart !== oldestChainLog.rawTime) {
+              // 3. Verificar que PREVIAMENTE hubo al menos 10 segundos de ruido bajo (<= 75 dB)
+              let hasPrevLowNoise = false;
+              if (highChainStartIndex > 0) {
+                const prevLog = sortedData[highChainStartIndex - 1];
+
+                // Comprobamos que el hueco temporal entre el último bajo ruido y el primer exceso sea <= 15s
+                if (oldestHighLog.rawTime - prevLog.rawTime <= 15000) {
+                  let lowChainStartIndex = highChainStartIndex - 1;
+
+                  for (let i = highChainStartIndex - 2; i >= 0; i--) {
+                    const current = sortedData[i];
+                    const next = sortedData[i + 1];
+
+                    // Si el nivel de ruido supera el umbral, se rompe la cadena de bajo ruido
+                    if (current.decibels > UMBRAL_RUIDO) {
+                      break;
+                    }
+                    // Si hay un hueco temporal de más de 15 segundos, se rompe la cadena
+                    if (next.rawTime - current.rawTime > 15000) {
+                      break;
+                    }
+
+                    lowChainStartIndex = i;
+                  }
+
+                  const oldestLowLog = sortedData[lowChainStartIndex];
+                  const duracionBajoMs = prevLog.rawTime - oldestLowLog.rawTime;
+
+                  if (duracionBajoMs >= 10000) {
+                    hasPrevLowNoise = true;
+                  }
+                }
+              }
+
+              // 4. Si se cumple la condición previa de bajo ruido y no hemos enviado alerta para esta cadena
+              if (hasPrevLowNoise && ultimaAlertaChainStart !== oldestHighLog.rawTime) {
                 enviarAlertaTelegram(valorRuido);
-                ultimaAlertaChainStart = oldestChainLog.rawTime;
+                ultimaAlertaChainStart = oldestHighLog.rawTime;
               }
             }
           }
