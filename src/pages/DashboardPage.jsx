@@ -25,6 +25,7 @@ const getPersistedState = () => {
     ultimoInicioRuidoPersistente: localStorage.getItem('ultimoInicioRuidoPersistente') ? parseInt(localStorage.getItem('ultimoInicioRuidoPersistente'), 10) : null,
     ultimoMilestoneAlertaPersistente: localStorage.getItem('ultimoMilestoneAlertaPersistente') ? parseInt(localStorage.getItem('ultimoMilestoneAlertaPersistente'), 10) : 0,
     inicioEvaluacionRuido: localStorage.getItem('inicioEvaluacionRuido') ? parseInt(localStorage.getItem('inicioEvaluacionRuido'), 10) : null,
+    inicioEvaluacionSilencio: localStorage.getItem('inicioEvaluacionSilencio') ? parseInt(localStorage.getItem('inicioEvaluacionSilencio'), 10) : null,
   };
 };
 
@@ -47,6 +48,10 @@ const setPersistedState = (state) => {
   if (state.inicioEvaluacionRuido !== undefined) {
     if (state.inicioEvaluacionRuido === null) localStorage.removeItem('inicioEvaluacionRuido');
     else localStorage.setItem('inicioEvaluacionRuido', state.inicioEvaluacionRuido.toString());
+  }
+  if (state.inicioEvaluacionSilencio !== undefined) {
+    if (state.inicioEvaluacionSilencio === null) localStorage.removeItem('inicioEvaluacionSilencio');
+    else localStorage.setItem('inicioEvaluacionSilencio', state.inicioEvaluacionSilencio.toString());
   }
 };
 
@@ -94,6 +99,30 @@ function enviarAlertaPersistenteTelegram(nivelRuido, tiempoFormateado) {
   })
   .catch(error => {
     console.error("Error de red al enviar alerta persistente a Telegram:", error);
+  });
+}
+
+/**
+ * Función para enviar una notificación informativa de silencio/tranquilidad a Telegram.
+ * @param {number} nivelRuido - El valor actual del ruido en decibelios.
+ */
+function enviarAlertaSilencioTelegram(nivelRuido) {
+  const mensajeText = `🟢 🔇 ¡Fase de Silencio y Tranquilidad Restaurada! El nivel de ruido ha regresado a niveles aceptables (≤${UMBRAL_RUIDO} dB). Valor actual: ${nivelRuido} dB.`;
+  const mensaje = encodeURIComponent(mensajeText);
+  const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage?chat_id=${TELEGRAM_CHAT_ID}&text=${mensaje}`;
+
+  fetch(url, {
+    method: 'POST'
+  })
+  .then(response => {
+    if (!response.ok) {
+      console.error("Error al enviar notificación de silencio a Telegram:", response.statusText);
+    } else {
+      console.log("Notificación de silencio enviada a Telegram exitosamente.");
+    }
+  })
+  .catch(error => {
+    console.error("Error de red al enviar notificación de silencio a Telegram:", error);
   });
 }
 
@@ -167,57 +196,77 @@ export default function DashboardPage() {
 
               // 0. Verificar si nos hemos recuperado (entrado a Fase de Silencio/Bajo Ruido) desde que empezó el ruido persistente
               if (state.ultimoInicioRuidoPersistente !== null) {
-                let seHaRecuperado = false;
-                for (let d = 0; d < sortedData.length; d++) {
-                  const currentLog = sortedData[d];
-                  if (currentLog.rawTime < state.ultimoInicioRuidoPersistente) {
-                    continue; // La recuperación debe ser posterior al inicio del ruido persistente
-                  }
-
-                  const esPrimeraCaida = currentLog.decibels <= UMBRAL_RUIDO && (d === 0 || sortedData[d - 1].decibels > UMBRAL_RUIDO);
-                  if (esPrimeraCaida) {
-                    const W_start = currentLog.rawTime;
-                    const W_end = W_start + 10000;
-
-                    let lowDurationMs = 0;
-                    let gapsDetected = false;
-
-                    for (let k = d; k < sortedData.length; k++) {
-                      const t_curr = sortedData[k].rawTime;
-                      if (t_curr >= W_end) {
-                        break;
-                      }
-
-                      let t_next = (k < sortedData.length - 1) ? sortedData[k + 1].rawTime : W_end;
-                      if (t_next > W_end) {
-                        t_next = W_end;
-                      }
-
-                      const interval = t_next - t_curr;
-                      if (interval > 15000) {
-                        gapsDetected = true;
-                        break;
-                      }
-
-                      if (sortedData[k].decibels <= UMBRAL_RUIDO) {
-                        lowDurationMs += interval;
-                      }
-                    }
-
-                    if (!gapsDetected && lowDurationMs >= 6000) {
-                      seHaRecuperado = true;
-                      break;
-                    }
-                  }
+                // A. Iniciar el periodo de evaluación de silencio si detectamos la primera lectura <= 75 dB
+                if (valorRuido <= UMBRAL_RUIDO && state.inicioEvaluacionSilencio === null) {
+                  nextState.inicioEvaluacionSilencio = latestLog.rawTime;
+                  state.inicioEvaluacionSilencio = latestLog.rawTime; // Actualizar localmente para la evaluación en este mismo ciclo
                 }
 
-                if (seHaRecuperado) {
-                  nextState.ultimoInicioRuidoPersistente = null;
-                  nextState.ultimoMilestoneAlertaPersistente = 0;
-                  nextState.inicioEvaluacionRuido = null;
-                  state.ultimoInicioRuidoPersistente = null;
-                  state.ultimoMilestoneAlertaPersistente = 0;
-                  state.inicioEvaluacionRuido = null;
+                // B. Si hay una ventana de evaluación de silencio activa
+                if (state.inicioEvaluacionSilencio !== null) {
+                  const elapsedMs = latestLog.rawTime - state.inicioEvaluacionSilencio;
+
+                  // Evaluar si transcurrieron al menos 30 segundos (usando 28s de umbral para tolerancia de intervalo del sensor)
+                  if (elapsedMs >= 28000) {
+                    const W_start = state.inicioEvaluacionSilencio;
+                    const W_end = W_start + 30000;
+
+                    let lowDurationMs = 0;
+                    let totalDurationMs = 0;
+                    let totalSamples = 0;
+                    let lowSamples = 0;
+
+                    for (let k = 0; k < sortedData.length; k++) {
+                      const log = sortedData[k];
+                      
+                      // Contar muestras dentro de la ventana de 30 segundos
+                      if (log.rawTime >= W_start && log.rawTime <= W_end) {
+                        totalSamples++;
+                        if (log.decibels <= UMBRAL_RUIDO) {
+                          lowSamples++;
+                        }
+                      }
+
+                      // Calcular duración de los intervalos dentro de la ventana de 30 segundos
+                      const t_curr = log.rawTime;
+                      if (t_curr >= W_start && t_curr < W_end) {
+                        let t_next = (k < sortedData.length - 1) ? sortedData[k + 1].rawTime : W_end;
+                        if (t_next > W_end) {
+                          t_next = W_end;
+                        }
+                        
+                        const interval = t_next - t_curr;
+                        totalDurationMs += interval;
+                        if (log.decibels <= UMBRAL_RUIDO) {
+                          lowDurationMs += interval;
+                        }
+                      }
+                    }
+
+                    const ratioDuration = totalDurationMs > 0 ? (lowDurationMs / totalDurationMs) : 0;
+                    const ratioSamples = totalSamples > 0 ? (lowSamples / totalSamples) : 0;
+
+                    // Consolida recuperación si la mayoría de las lecturas en 30s son <= 75 dB (>50%)
+                    const seHaRecuperado = ratioDuration > 0.5 || ratioSamples > 0.5;
+
+                    if (seHaRecuperado) {
+                      enviarAlertaSilencioTelegram(valorRuido);
+
+                      nextState.ultimoInicioRuidoPersistente = null;
+                      nextState.ultimoMilestoneAlertaPersistente = 0;
+                      nextState.inicioEvaluacionRuido = null;
+                      nextState.inicioEvaluacionSilencio = null;
+
+                      state.ultimoInicioRuidoPersistente = null;
+                      state.ultimoMilestoneAlertaPersistente = 0;
+                      state.inicioEvaluacionRuido = null;
+                      state.inicioEvaluacionSilencio = null;
+                    } else {
+                      // Si no se consolidó el silencio mayoritario en 30s, se reinicia la ventana de evaluación de silencio
+                      nextState.inicioEvaluacionSilencio = null;
+                      state.inicioEvaluacionSilencio = null;
+                    }
+                  }
                 }
               }
 
