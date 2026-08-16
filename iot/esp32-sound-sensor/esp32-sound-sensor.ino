@@ -20,25 +20,34 @@ const char *cloudFunctionUrl =
 const int sensorPin = 34; // Pin analógico ADC GPIO34
 const char *deviceId = "esp32_01";
 
-// Ventana de muestreo Pico a Pico en milisegundos (50 ms)
-const unsigned long sampleWindow = 50;
+// Ventana de muestreo Pico a Pico en milisegundos (100 ms)
+const unsigned long sampleWindow = 100;
 
 // Intervalo de envío de datos a Firebase (milisegundos) - Cada 5 segundos
 const unsigned long sendInterval = 5000;
 unsigned long lastSendTime = 0;
 
+// ==================== FILTRO DE PROMEDIO MÓVIL (5 LECTURAS) ====================
+const int numReadings = 5;
+int vppReadings[numReadings] = {0};
+int readIndex = 0;
+long totalVpp = 0;
+
 /**
- * Función para medir la Amplitud Pico a Pico (Vpp) en el sensor de sonido.
- * Lee continuamente el GPIO34 durante 'sampleWindow' (50 ms) calculando
- * la diferencia entre el valor máximo (signalMax) y el mínimo (signalMin).
- * Se resta el piso de ruido base (noiseFloor = 220) para descontar el ruido
- * residual del ADC en silencio y entregar entre 30dB y 40dB en reposo.
+ * Función para medir la Amplitud Pico a Pico (Vpp) en el sensor de sonido
+ * aplicando un filtro de promedio móvil (5 lecturas) y Zona Muerta (Noise Floor).
+ * 
+ * 1. Muestrea el GPIO34 durante 'sampleWindow' (100 ms) para obtener Vpp instantáneo.
+ * 2. Almacena y promedia las últimas 5 lecturas de Vpp para eliminar fluctuaciones eléctricas.
+ * 3. Si el promedio está dentro de la Zona Muerta (noiseThreshold <= 230), fija 30.0 dB (Vpp = 3).
+ * 4. Si existe señal sonora real, escala proporcionalmente por encima de 30 dB.
  */
 int readSoundPeakToPeak() {
   unsigned long startMillis = millis();
   int signalMax = 0;
   int signalMin = 4095;
 
+  // 1. Muestreo continuo durante 100 ms en GPIO34
   while (millis() - startMillis < sampleWindow) {
     int sample = analogRead(sensorPin);
     if (sample > signalMax) {
@@ -49,19 +58,29 @@ int readSoundPeakToPeak() {
     }
   }
 
-  int peakToPeak = signalMax - signalMin;
+  int rawVpp = signalMax - signalMin;
 
-  // Piso de ruido ( noiseFloor ) de lectura en reposo/silencio (~220 ADC)
-  const int noiseFloor = 220;
-  peakToPeak = peakToPeak - noiseFloor;
+  // 2. Filtro de Promedio Móvil de 5 lecturas
+  totalVpp = totalVpp - vppReadings[readIndex];
+  vppReadings[readIndex] = rawVpp;
+  totalVpp = totalVpp + vppReadings[readIndex];
+  readIndex = (readIndex + 1) % numReadings;
 
-  // Limitar el valor mínimo a 3 (que al aplicar 20*log10(3)+20 equivale a 29.5dB -> 30.0dB)
-  // garantizando un rango dinámico de 30 dB a 100 dB en el dashboard.
-  if (peakToPeak < 3) {
-    peakToPeak = 3;
+  int avgVpp = totalVpp / numReadings;
+
+  // 3. Zona Muerta ( Noise Floor ) para filtrar ruido eléctrico del ADC (~230 ADC unidades)
+  const int noiseThreshold = 230;
+
+  int finalVpp;
+  if (avgVpp <= noiseThreshold) {
+    // Ruido eléctrico en reposo -> Nivel base fijo de 30.0 dB (Vpp = 3)
+    finalVpp = 3;
+  } else {
+    // Señal acústica real sostenida -> Escala proporcional sobre 30.0 dB
+    finalVpp = (avgVpp - noiseThreshold) + 3;
   }
 
-  return peakToPeak;
+  return finalVpp;
 }
 
 void setup() {
