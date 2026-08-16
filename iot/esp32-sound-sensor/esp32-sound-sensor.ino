@@ -7,10 +7,9 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 
-
 // ==================== CONFIGURACIÓN DE RED WIFI ====================
-const char *ssid = "HUAWEI P30 lite";
-const char *password = "16dda921c8c7";
+const char *ssid = "Nettplus_Astudillo Romero";
+const char *password = "19_03_1953";
 
 // ==================== CONFIGURACIÓN DE ENDPOINT ====================
 const char *cloudFunctionUrl =
@@ -18,13 +17,43 @@ const char *cloudFunctionUrl =
     "postSoundData";
 
 // ==================== CONFIGURACIÓN DE HARDWARE ====================
-const int sensorPin = 34; // Pin analógico ADC
+const int sensorPin = 34; // Pin analógico ADC GPIO34
 const char *deviceId = "esp32_01";
 
-// Intervalo de envío de datos (milisegundos) - Cada 5 segundos para mejor
-// respuesta
+// Ventana de muestreo Pico a Pico en milisegundos (50 ms)
+const unsigned long sampleWindow = 50;
+
+// Intervalo de envío de datos a Firebase (milisegundos) - Cada 5 segundos
 const unsigned long sendInterval = 5000;
 unsigned long lastSendTime = 0;
+
+/**
+ * Función para medir la Amplitud Pico a Pico (Vpp) en el sensor de sonido.
+ * Lee continuamente el GPIO34 durante 'sampleWindow' (50 ms) calculando
+ * la diferencia entre el valor máximo (signalMax) y el mínimo (signalMin).
+ * Esto descarta el DC Offset (1.25V en reposo) y permite obtener 0 o ruido base en silencio.
+ */
+int readSoundPeakToPeak() {
+  unsigned long startMillis = millis();
+  int signalMax = 0;
+  int signalMin = 4095;
+
+  while (millis() - startMillis < sampleWindow) {
+    int sample = analogRead(sensorPin);
+    if (sample > signalMax) {
+      signalMax = sample; // Almacena la onda más alta
+    }
+    if (sample < signalMin) {
+      signalMin = sample; // Almacena la onda más baja
+    }
+  }
+
+  int peakToPeak = signalMax - signalMin;
+  if (peakToPeak < 0) {
+    peakToPeak = 0;
+  }
+  return peakToPeak;
+}
 
 void setup() {
   Serial.begin(115200);
@@ -51,43 +80,19 @@ void setup() {
 void loop() {
   unsigned long currentMillis = millis();
 
-  // Enviar datos cada intervalo programado
+  // Enviar datos cada intervalo programado (5 segundos)
   if (currentMillis - lastSendTime >= sendInterval) {
     lastSendTime = currentMillis;
 
     if (WiFi.status() == WL_CONNECTED) {
 
-      // =========================================================================
-      // 1. CAPTURA DE AMPLITUD (PICO A PICO) EN LUGAR DE PROMEDIO
-      // =========================================================================
-      unsigned long sampleWindow = 100; // Muestrear durante 100 ms continuos
-      unsigned long startMillis = millis();
-
-      int signalMax = 0;
-      int signalMin = 4095;
-
-      while (millis() - startMillis < sampleWindow) {
-        int sample = analogRead(sensorPin);
-        if (sample < 4095) {
-          if (sample > signalMax) {
-            signalMax = sample; // Almacena la onda más alta
-          }
-          if (sample < signalMin) {
-            signalMin = sample; // Almacena la onda más baja
-          }
-        }
-      }
-
-      // La amplitud real del ruido es la diferencia entre el valor más alto y
-      // más bajo
-      int rawReading = signalMax - signalMin;
+      // 1. CAPTURA DE AMPLITUD PICO A PICO (Vpp)
+      int rawReading = readSoundPeakToPeak();
 
       Serial.print("Amplitud Pico a Pico capturada (0-4095): ");
       Serial.println(rawReading);
 
-      // =========================================================================
       // 2. Preparar el cliente HTTPS seguro
-      // =========================================================================
       WiFiClientSecure client;
       client.setInsecure();
 
@@ -95,7 +100,7 @@ void loop() {
       http.begin(client, cloudFunctionUrl);
       http.addHeader("Content-Type", "application/json");
 
-      // 3. Crear el payload JSON a enviar
+      // 3. Crear el payload JSON a enviar con el valor Pico a Pico
       String jsonPayload = "{\"deviceId\":\"" + String(deviceId) +
                            "\",\"rawReading\":" + String(rawReading) + "}";
 
@@ -123,3 +128,4 @@ void loop() {
     }
   }
 }
+
