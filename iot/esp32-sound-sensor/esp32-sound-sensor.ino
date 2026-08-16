@@ -20,67 +20,39 @@ const char *cloudFunctionUrl =
 const int sensorPin = 34; // Pin analógico ADC GPIO34
 const char *deviceId = "esp32_01";
 
-// Ventana de muestreo Pico a Pico en milisegundos (100 ms)
-const unsigned long sampleWindow = 100;
-
 // Intervalo de envío de datos a Firebase (milisegundos) - Cada 5 segundos
 const unsigned long sendInterval = 5000;
 unsigned long lastSendTime = 0;
 
-// ==================== FILTRO DE PROMEDIO MÓVIL (5 LECTURAS) ====================
-const int numReadings = 5;
-int vppReadings[numReadings] = {0};
-int readIndex = 0;
-long totalVpp = 0;
-
 /**
- * Función para medir la Amplitud Pico a Pico (Vpp) en el sensor de sonido
- * aplicando un filtro de promedio móvil (5 lecturas) y Zona Muerta (Noise Floor).
- * 
- * 1. Muestrea el GPIO34 durante 'sampleWindow' (100 ms) para obtener Vpp instantáneo.
- * 2. Almacena y promedia las últimas 5 lecturas de Vpp para eliminar fluctuaciones eléctricas.
- * 3. Si el promedio está dentro de la Zona Muerta (noiseThreshold <= 230), fija 30.0 dB (Vpp = 3).
- * 4. Si existe señal sonora real, escala proporcionalmente por encima de 30 dB.
+ * Función de lectura de sonido con muestreo de memoria cero (Zero-Memory Sampling).
+ * Reinicia completamente signalMax = 0 y signalMin = 4095 en cada llamada,
+ * sin utilizar variables globales o estáticas acumulativas.
  */
 int readSoundPeakToPeak() {
   unsigned long startMillis = millis();
-  int signalMax = 0;
-  int signalMin = 4095;
+  unsigned int signalMax = 0;
+  unsigned int signalMin = 4095;
 
-  // 1. Muestreo continuo durante 100 ms en GPIO34
-  while (millis() - startMillis < sampleWindow) {
+  // Ventana estricta de 100 ms en GPIO34
+  while (millis() - startMillis < 100) {
     int sample = analogRead(sensorPin);
-    if (sample > signalMax) {
-      signalMax = sample; // Almacena la onda más alta
-    }
-    if (sample < signalMin) {
-      signalMin = sample; // Almacena la onda más baja
+    if (sample < 4095) {
+      if (sample > signalMax) signalMax = sample;
+      if (sample < signalMin) signalMin = sample;
     }
   }
 
-  int rawVpp = signalMax - signalMin;
+  int peakToPeak = signalMax - signalMin;
 
-  // 2. Filtro de Promedio Móvil de 5 lecturas
-  totalVpp = totalVpp - vppReadings[readIndex];
-  vppReadings[readIndex] = rawVpp;
-  totalVpp = totalVpp + vppReadings[readIndex];
-  readIndex = (readIndex + 1) % numReadings;
-
-  int avgVpp = totalVpp / numReadings;
-
-  // 3. Zona Muerta ( Noise Floor ) para filtrar ruido eléctrico del ADC (~230 ADC unidades)
-  const int noiseThreshold = 230;
-
-  int finalVpp;
-  if (avgVpp <= noiseThreshold) {
-    // Ruido eléctrico en reposo -> Nivel base fijo de 30.0 dB (Vpp = 3)
-    finalVpp = 3;
-  } else {
-    // Señal acústica real sostenida -> Escala proporcional sobre 30.0 dB
-    finalVpp = (avgVpp - noiseThreshold) + 3;
+  // Umbral Duro de Silencio (Noise Floor Cutoff):
+  // Si el peakToPeak es menor o igual a 30 puntos (ruido eléctrico base del ESP32),
+  // asigna directamente 3 (que en la Cloud Function genera dB = 30.0)
+  if (peakToPeak <= 30) {
+    peakToPeak = 3;
   }
 
-  return finalVpp;
+  return peakToPeak;
 }
 
 void setup() {
@@ -114,7 +86,7 @@ void loop() {
 
     if (WiFi.status() == WL_CONNECTED) {
 
-      // 1. CAPTURA DE AMPLITUD PICO A PICO (Vpp)
+      // 1. CAPTURA DE AMPLITUD PICO A PICO (Zero-Memory Sampling)
       int rawReading = readSoundPeakToPeak();
 
       Serial.print("Amplitud Pico a Pico capturada (0-4095): ");
@@ -156,4 +128,5 @@ void loop() {
     }
   }
 }
+
 
