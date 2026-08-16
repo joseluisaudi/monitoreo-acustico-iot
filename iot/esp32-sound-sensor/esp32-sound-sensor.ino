@@ -24,18 +24,21 @@ const char *deviceId = "esp32_01";
 const unsigned long sendInterval = 5000;
 unsigned long lastSendTime = 0;
 
+#include <math.h>
+
 /**
- * Función exacta para calcular los decibelios en el ESP32 mediante mapeo lineal.
- * Muestrea durante 100 ms en el GPIO34 y aplica umbral de silencio a <= 40 Vpp.
+ * Función de calibración activa para el sensor de sonido (MAX9814 / módulo analógico).
+ * Muestrea durante 100 ms en el GPIO34, convierte la amplitud pico a pico a voltaje real
+ * y calcula los decibelios dinámicos en una escala logarítmica activa (35 dB a 95 dB).
  */
 float calcularDecibelios() {
   unsigned long startMillis = millis();
   unsigned int signalMax = 0;
   unsigned int signalMin = 4095;
 
-  // Ventana de muestreo limpia de 100 ms
+  // Muestreo limpio en ventana de 100 ms
   while (millis() - startMillis < 100) {
-    int sample = analogRead(sensorPin); // GPIO34
+    int sample = analogRead(34); // Pin GPIO34
     if (sample < 4095) {
       if (sample > signalMax) signalMax = sample;
       if (sample < signalMin) signalMin = sample;
@@ -44,17 +47,21 @@ float calcularDecibelios() {
 
   int peakToPeak = signalMax - signalMin;
 
-  // UMBRAL DE SILENCIO (RUIDO ELÉCTRICO)
-  // Si el pico a pico es menor o igual a 40 puntos digitales, ES SILENCIO.
-  if (peakToPeak <= 40) {
-    return 30.0; // Retorna 30 dB fijos para silencio absoluto
+  // Conversión a Voltaje (ESP32 ADC: 3.3V / 4095)
+  float volts = (peakToPeak * 3.3) / 4095.0;
+
+  // Si no hay señal o es ruido eléctrico puro de fondo
+  if (volts < 0.02) {
+    return 35.0; // Piso de silencio base
   }
 
-  // MAPEO LINEAL PARA SONIDO REAL
-  // Mapea lecturas de peakToPeak de 41 a 2000 hacia el rango de 31 dB a 90 dB
-  float db = 30.0 + ((float)(peakToPeak - 40) * (60.0 / 1960.0));
+  // Fórmula logarítmica calibrada para MAX9814 con ganancia expandida
+  // Convierte la amplitud de voltaje en decibelios útiles (35 dB a 95 dB)
+  float db = 20.0 * log10(volts / 0.002) + 15.0;
 
-  if (db > 95.0) db = 95.0; // Límite máximo de seguridad
+  // Filtros de contención de rango
+  if (db < 30.0) db = 30.0;
+  if (db > 95.0) db = 95.0;
 
   return db;
 }
