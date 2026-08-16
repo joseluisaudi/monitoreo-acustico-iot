@@ -31,7 +31,8 @@ unsigned long lastSendTime = 0;
  * Función para medir la Amplitud Pico a Pico (Vpp) en el sensor de sonido.
  * Lee continuamente el GPIO34 durante 'sampleWindow' (50 ms) calculando
  * la diferencia entre el valor máximo (signalMax) y el mínimo (signalMin).
- * Esto descarta el DC Offset (1.25V en reposo) y permite obtener 0 o ruido base en silencio.
+ * Se resta el piso de ruido base (noiseFloor = 220) para descontar el ruido
+ * residual del ADC en silencio y entregar entre 30dB y 40dB en reposo.
  */
 int readSoundPeakToPeak() {
   unsigned long startMillis = millis();
@@ -49,9 +50,17 @@ int readSoundPeakToPeak() {
   }
 
   int peakToPeak = signalMax - signalMin;
-  if (peakToPeak < 0) {
-    peakToPeak = 0;
+
+  // Piso de ruido ( noiseFloor ) de lectura en reposo/silencio (~220 ADC)
+  const int noiseFloor = 220;
+  peakToPeak = peakToPeak - noiseFloor;
+
+  // Limitar el valor mínimo a 3 (que al aplicar 20*log10(3)+20 equivale a 29.5dB -> 30.0dB)
+  // garantizando un rango dinámico de 30 dB a 100 dB en el dashboard.
+  if (peakToPeak < 3) {
+    peakToPeak = 3;
   }
+
   return peakToPeak;
 }
 

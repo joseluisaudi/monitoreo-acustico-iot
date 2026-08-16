@@ -36,12 +36,15 @@ exports.postSoundData = onRequest({ cors: true }, async (req, res) => {
 
   try {
     // 1. Conversión matemática de lectura analógica a Decibelios (dB)
-    // Mapeo logarítmico: 0 analógico -> 20 dB (silencio), 4095 analógico -> ~92.2 dB (ruido alto)
-    let decibels = 20.0;
+    // Mapeo logarítmico: con noiseFloor descontado en ESP32, silencio = 30.0 dB, pico = 90-100 dB
+    let decibels = 30.0;
     if (raw > 0) {
       // Fórmula logarítmica: dB = 20 * log10(raw) + 20
       const dBValue = 20 * Math.log10(raw) + 20;
       decibels = Math.round(dBValue * 10) / 10; // Redondear a 1 decimal
+    }
+    if (decibels < 30.0) {
+      decibels = 30.0; // Umbral mínimo acústico en silencio
     }
 
     // 2. Clasificación del nivel de riesgo auditivo
