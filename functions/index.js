@@ -17,35 +17,30 @@ exports.postSoundData = onRequest({ cors: true }, async (req, res) => {
     return res.status(405).json({ error: "Método no permitido. Utilizar POST." });
   }
 
-  const { deviceId, rawReading } = req.body;
+  const { deviceId, decibels: bodyDecibels, rawReading } = req.body;
 
   // Validación de campos obligatorios
-  if (!deviceId || rawReading === undefined) {
+  if (!deviceId || (bodyDecibels === undefined && rawReading === undefined)) {
     return res.status(400).json({
-      error: "Datos inválidos. Se requiere 'deviceId' y 'rawReading' (0-4095)."
+      error: "Datos inválidos. Se requiere 'deviceId' y 'decibels' o 'rawReading'."
     });
   }
 
-  // Parsear y asegurar el rango de la lectura analógica (ESP32 ADC es de 12 bits: 0-4095)
-  const raw = parseInt(rawReading, 10);
-  if (isNaN(raw) || raw < 0 || raw > 4095) {
+  // Extraer el valor de decibelios procesado por el ESP32 (sin recalcular log10 ni sumar offsets)
+  let rawVal = bodyDecibels !== undefined ? bodyDecibels : rawReading;
+  let decibels = parseFloat(rawVal);
+
+  if (isNaN(decibels)) {
     return res.status(400).json({
-      error: "El valor de 'rawReading' debe ser un número entero entre 0 y 4095."
+      error: "El valor numérico de decibelios enviado es inválido."
     });
   }
 
   try {
-    // 1. Conversión matemática de lectura analógica a Decibelios (dB)
-    // Mapeo logarítmico: con noiseFloor descontado en ESP32, silencio = 30.0 dB, pico = 90-100 dB
-    let decibels = 30.0;
-    if (raw > 0) {
-      // Fórmula logarítmica: dB = 20 * log10(raw) + 20
-      const dBValue = 20 * Math.log10(raw) + 20;
-      decibels = Math.round(dBValue * 10) / 10; // Redondear a 1 decimal
-    }
-    if (decibels < 30.0) {
-      decibels = 30.0; // Umbral mínimo acústico en silencio
-    }
+    // 1. Asegurar redondeo a 1 decimal y límites de seguridad de 30.0 dB a 95.0 dB
+    decibels = Math.round(decibels * 10) / 10;
+    if (decibels < 30.0) decibels = 30.0;
+    if (decibels > 95.0) decibels = 95.0;
 
     // 2. Clasificación del nivel de riesgo auditivo
     let status = "normal";

@@ -25,18 +25,17 @@ const unsigned long sendInterval = 5000;
 unsigned long lastSendTime = 0;
 
 /**
- * Función de lectura de sonido con muestreo de memoria cero (Zero-Memory Sampling).
- * Reinicia completamente signalMax = 0 y signalMin = 4095 en cada llamada,
- * sin utilizar variables globales o estáticas acumulativas.
+ * Función exacta para calcular los decibelios en el ESP32 mediante mapeo lineal.
+ * Muestrea durante 100 ms en el GPIO34 y aplica umbral de silencio a <= 40 Vpp.
  */
-int readSoundPeakToPeak() {
+float calcularDecibelios() {
   unsigned long startMillis = millis();
   unsigned int signalMax = 0;
   unsigned int signalMin = 4095;
 
-  // Ventana estricta de 100 ms en GPIO34
+  // Ventana de muestreo limpia de 100 ms
   while (millis() - startMillis < 100) {
-    int sample = analogRead(sensorPin);
+    int sample = analogRead(sensorPin); // GPIO34
     if (sample < 4095) {
       if (sample > signalMax) signalMax = sample;
       if (sample < signalMin) signalMin = sample;
@@ -45,14 +44,19 @@ int readSoundPeakToPeak() {
 
   int peakToPeak = signalMax - signalMin;
 
-  // Umbral Duro de Silencio (Noise Floor Cutoff):
-  // Si el peakToPeak es menor o igual a 30 puntos (ruido eléctrico base del ESP32),
-  // asigna directamente 3 (que en la Cloud Function genera dB = 30.0)
-  if (peakToPeak <= 30) {
-    peakToPeak = 3;
+  // UMBRAL DE SILENCIO (RUIDO ELÉCTRICO)
+  // Si el pico a pico es menor o igual a 40 puntos digitales, ES SILENCIO.
+  if (peakToPeak <= 40) {
+    return 30.0; // Retorna 30 dB fijos para silencio absoluto
   }
 
-  return peakToPeak;
+  // MAPEO LINEAL PARA SONIDO REAL
+  // Mapea lecturas de peakToPeak de 41 a 2000 hacia el rango de 31 dB a 90 dB
+  float db = 30.0 + ((float)(peakToPeak - 40) * (60.0 / 1960.0));
+
+  if (db > 95.0) db = 95.0; // Límite máximo de seguridad
+
+  return db;
 }
 
 void setup() {
@@ -86,11 +90,11 @@ void loop() {
 
     if (WiFi.status() == WL_CONNECTED) {
 
-      // 1. CAPTURA DE AMPLITUD PICO A PICO (Zero-Memory Sampling)
-      int rawReading = readSoundPeakToPeak();
+      // 1. CAPTURA Y CÁLCULO DIRECTO DE DECIBELIOS (dB)
+      float decibelios = calcularDecibelios();
 
-      Serial.print("Amplitud Pico a Pico capturada (0-4095): ");
-      Serial.println(rawReading);
+      Serial.print("Decibelios calculados (dB): ");
+      Serial.println(decibelios, 1);
 
       // 2. Preparar el cliente HTTPS seguro
       WiFiClientSecure client;
@@ -100,9 +104,10 @@ void loop() {
       http.begin(client, cloudFunctionUrl);
       http.addHeader("Content-Type", "application/json");
 
-      // 3. Crear el payload JSON a enviar con el valor Pico a Pico
+      // 3. Crear el payload JSON con decibelios calculados directamente
       String jsonPayload = "{\"deviceId\":\"" + String(deviceId) +
-                           "\",\"rawReading\":" + String(rawReading) + "}";
+                           "\",\"decibels\":" + String(decibelios, 1) +
+                           ",\"rawReading\":" + String(decibelios, 1) + "}";
 
       Serial.print("Enviando POST payload: ");
       Serial.println(jsonPayload);
@@ -128,5 +133,6 @@ void loop() {
     }
   }
 }
+
 
 
